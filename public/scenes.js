@@ -693,9 +693,15 @@
       [[-w * 0.22, 0], [w * 0.22, 0], [-w * 0.22, -d * 0.28], [w * 0.22, -d * 0.28]].forEach(([x, z]) => {
         group.add(box(8, 0.12, 1.8, tableWood, x, 1.05, z));
         [-3.2, 3.2].forEach((dx) => group.add(box(0.5, 1, 1.4, tableWood, x + dx, 0.5, z)));
-        // MacBooks to try (simulated work with E)
-        group.add(laptop(x - 2.4, 1.11, z, 0));
-        group.add(laptop(x - 0.8, 1.11, z, Math.PI));
+        // MacBooks to try: E opens a working macOS-style demo (MacDemo below)
+        [[x - 2.4, 0, 'MacBook Pro'], [x - 0.8, Math.PI, 'MacBook Air']].forEach(([lx, turn, name]) => {
+          const mac = laptop(lx, 1.11, z, turn);
+          mac.userData.interactable = { type: 'action', label: `${name} on display` };
+          mac.userData.prompt = `Press E to try the ${name}`;
+          mac.userData.label = `${name} · try it (E)`;
+          mac.userData.onInteract = () => { MacDemo.open(name); return null; };
+          group.add(mac);
+        });
         // iPhones and iPads on stands
         [0.9, 2.4].forEach((dx, index) => {
           const device = new THREE.Group();
@@ -1126,4 +1132,362 @@
     [/showcase_shelf/, 'showcaseShelf'], [/apple_store/, 'appleStore'], [/mac_flagship/, 'macFlagship'], [/gravity_tower/, 'gravityTower'], [/glass_villa/, 'glassVilla'], [/water_mirror/, 'waterMirror'], [/apple_video_billboard/, 'appleVideoBillboard'], [/macos_section/, 'macosSection'], [/apple_billboard/, 'appleBillboard']
   ];
   rules.slice().reverse().forEach(([pattern, name]) => PropKit.registerBuilder(pattern, name, builders[name]));
+})();
+
+// ============================================================================
+// MAC DEMO: TRY A MAC AT THE HOUSE OF MAC AVENUE TABLES
+// ============================================================================
+// E on a MacBook on display opens a working macOS-style desktop: menu bar
+// with a live clock, Dock, draggable windows, Spotlight (Ctrl/Cmd+Space),
+// Finder, Safari (opens real sites in a new tab), Terminal (a small shell),
+// Notes (saved in this browser), Calculator, System Settings (wallpaper and
+// dark mode) and About This Mac. Esc or "Leave demo" returns to the store.
+const MacDemo = (() => {
+  let overlay = null;
+  let model = 'MacBook Pro';
+  const appleIcon = (size) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="currentColor" style="vertical-align:-2px"><path d="${APPLE_PATH}"/></svg>`;
+  const APPLE_PATH = 'M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701';
+  let zTop = 10;
+  const WALLPAPERS = {
+    Tahoe: 'linear-gradient(160deg, #0b3d91 0%, #1e6fd9 35%, #8ec5ff 60%, #f7b2d9 100%)',
+    Sequoia: 'linear-gradient(200deg, #1b2a49 0%, #3a5a8c 40%, #e07a5f 85%, #f2cc8f 100%)',
+    Graphite: 'linear-gradient(180deg, #2b2d33 0%, #4a4e57 100%)',
+    Aurora: 'linear-gradient(140deg, #0f2027 0%, #2c5364 40%, #43c6ac 75%, #f8ffae 100%)'
+  };
+  const FILES = {
+    '/Users/dev': ['Desktop', 'Documents', 'Downloads', 'Projects', 'README.txt'],
+    '/Users/dev/Desktop': ['Screenshot 2026-10-28.png', 'todo.txt'],
+    '/Users/dev/Documents': ['Resume.pdf', 'Notes.txt', 'Budget.numbers'],
+    '/Users/dev/Downloads': ['node-v22.pkg', 'Xcode.xip', 'wallpaper.heic'],
+    '/Users/dev/Projects': ['github-multiverse', 'hello-swift', 'dotfiles']
+  };
+  const TEXT = {
+    '/Users/dev/README.txt': 'Welcome to the House of MAC demo Mac. Everything here is a simulation running in your browser.',
+    '/Users/dev/Desktop/todo.txt': '- ship it\n- fix the bug\n- write tests (really)',
+    '/Users/dev/Documents/Notes.txt': 'Remember: it works on my machine.'
+  };
+  const store = (action, key, value) => { try { if (action === 'get') return localStorage.getItem(key); localStorage.setItem(key, value); } catch (error) { return null; } return null; };
+  const esc = (text) => String(text).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  function css() {
+    if (document.getElementById('macdemo-style')) return;
+    const style = document.createElement('style');
+    style.id = 'macdemo-style';
+    style.textContent = `
+      #macdemo { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.75); font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+      #macdemo .md-screen { position: relative; width: min(1180px, 96vw); height: min(720px, 88vh); border-radius: 14px; overflow: hidden; border: 10px solid #111; box-shadow: 0 30px 80px rgba(0,0,0,0.6); color: #1d1d1f; }
+      #macdemo.dark .md-screen { color: #f5f5f7; }
+      #macdemo .md-wall { position: absolute; inset: 0; }
+      #macdemo .md-menubar { position: absolute; top: 0; left: 0; right: 0; height: 26px; display: flex; align-items: center; gap: 16px; padding: 0 12px; background: rgba(255,255,255,0.55); backdrop-filter: blur(20px); z-index: 1000; font-weight: 500; }
+      #macdemo.dark .md-menubar { background: rgba(30,30,32,0.6); }
+      #macdemo .md-menubar .md-right { margin-left: auto; display: flex; gap: 14px; align-items: center; }
+      #macdemo .md-menubar button { background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
+      #macdemo .md-menubar button:hover { background: rgba(0,0,0,0.12); }
+      #macdemo .md-applemenu { position: absolute; top: 26px; left: 8px; min-width: 200px; background: rgba(246,246,246,0.96); color: #1d1d1f; border-radius: 8px; padding: 5px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); z-index: 1001; display: none; }
+      #macdemo .md-applemenu div { padding: 5px 10px; border-radius: 5px; cursor: pointer; }
+      #macdemo .md-applemenu div:hover { background: #0a64d8; color: #fff; }
+      #macdemo .md-dock { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; padding: 7px 10px; border-radius: 18px; background: rgba(255,255,255,0.35); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.4); z-index: 1000; }
+      #macdemo .md-dock button { width: 48px; height: 48px; border-radius: 12px; border: 0; cursor: pointer; font-size: 11px; font-weight: 700; color: #fff; box-shadow: 0 2px 6px rgba(0,0,0,0.25); transition: transform 0.12s; position: relative; }
+      #macdemo .md-dock button:hover { transform: translateY(-6px) scale(1.12); }
+      #macdemo .md-dock button.open::after { content: ''; position: absolute; bottom: -6px; left: 50%; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%; background: #1d1d1f; }
+      #macdemo .md-win { position: absolute; min-width: 320px; min-height: 200px; background: #fff; color: #1d1d1f; border-radius: 10px; box-shadow: 0 18px 50px rgba(0,0,0,0.35); display: flex; flex-direction: column; overflow: hidden; resize: both; }
+      #macdemo.dark .md-win { background: #1e1e20; color: #f5f5f7; }
+      #macdemo .md-title { height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 10px; background: rgba(0,0,0,0.04); cursor: grab; user-select: none; font-weight: 600; }
+      #macdemo.dark .md-title { background: rgba(255,255,255,0.06); }
+      #macdemo .md-title span.md-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; cursor: pointer; }
+      #macdemo .md-title .md-name { flex: 1; text-align: center; margin-right: 50px; }
+      #macdemo .md-body { flex: 1; overflow: auto; padding: 10px; }
+      #macdemo .md-term { background: #1e1e1e; color: #d4d4d4; font: 13px Menlo, Consolas, monospace; white-space: pre-wrap; padding: 10px; height: 100%; box-sizing: border-box; overflow: auto; }
+      #macdemo .md-term input { background: none; border: 0; outline: none; color: #d4d4d4; font: inherit; width: 70%; }
+      #macdemo .md-finder { display: flex; height: 100%; }
+      #macdemo .md-finder aside { width: 140px; padding-right: 8px; border-right: 1px solid rgba(128,128,128,0.25); }
+      #macdemo .md-finder aside div, #macdemo .md-finder .md-files div { padding: 4px 8px; border-radius: 5px; cursor: pointer; }
+      #macdemo .md-finder aside div:hover, #macdemo .md-finder .md-files div:hover { background: rgba(10,100,216,0.15); }
+      #macdemo .md-finder .md-files { flex: 1; padding-left: 10px; }
+      #macdemo .md-safari input { width: 100%; box-sizing: border-box; padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(128,128,128,0.4); background: rgba(128,128,128,0.08); color: inherit; }
+      #macdemo .md-favs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 18px; }
+      #macdemo .md-favs a { display: flex; flex-direction: column; align-items: center; gap: 6px; text-decoration: none; color: inherit; }
+      #macdemo .md-favs a b { width: 56px; height: 56px; border-radius: 12px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 20px; }
+      #macdemo .md-calc { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+      #macdemo .md-calc .md-display { grid-column: span 4; text-align: right; font-size: 32px; padding: 8px; background: #2b2b2d; color: #fff; border-radius: 6px; overflow: hidden; }
+      #macdemo .md-calc button { height: 44px; border-radius: 22px; border: 0; font-size: 18px; cursor: pointer; background: #d4d4d2; }
+      #macdemo .md-calc button.op { background: #ff9f0a; color: #fff; }
+      #macdemo textarea { width: 100%; height: 100%; box-sizing: border-box; border: 0; outline: none; resize: none; background: transparent; color: inherit; font: 14px -apple-system, "Segoe UI", sans-serif; }
+      #macdemo .md-spot { position: absolute; top: 22%; left: 50%; transform: translateX(-50%); width: 540px; background: rgba(240,240,240,0.92); color: #1d1d1f; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.35); z-index: 1002; display: none; padding: 6px; }
+      #macdemo .md-spot input { width: 100%; box-sizing: border-box; font-size: 22px; padding: 10px; border: 0; outline: none; background: transparent; }
+      #macdemo .md-spot div { padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+      #macdemo .md-spot div.sel, #macdemo .md-spot div:hover { background: #0a64d8; color: #fff; }
+      #macdemo .md-leave { position: absolute; top: 14px; right: 18px; z-index: 95; background: #fff; border: 0; border-radius: 18px; padding: 8px 14px; font-weight: 700; cursor: pointer; }
+      #macdemo .md-swatch { display: inline-block; width: 70px; height: 46px; border-radius: 8px; margin: 4px; cursor: pointer; border: 2px solid transparent; }
+      #macdemo .md-swatch.sel { border-color: #0a64d8; }
+    `;
+    document.head.appendChild(style);
+  }
+
+  const APPS = {
+    finder: { name: 'Finder', color: 'linear-gradient(180deg,#5ac8fa,#007aff)', label: 'Fn', w: 560, h: 340, render: finder },
+    safari: { name: 'Safari', color: 'linear-gradient(180deg,#34c3ff,#0a64d8)', label: 'Sf', w: 640, h: 420, render: safari },
+    terminal: { name: 'Terminal', color: '#2b2b2d', label: '>_', w: 600, h: 360, render: terminal },
+    notes: { name: 'Notes', color: 'linear-gradient(180deg,#ffd60a,#ffb800)', label: 'Nt', w: 420, h: 360, render: notes },
+    calculator: { name: 'Calculator', color: '#505050', label: '±', w: 260, h: 380, render: calculator },
+    settings: { name: 'System Settings', color: 'linear-gradient(180deg,#8e8e93,#636366)', label: 'St', w: 480, h: 340, render: settings },
+    about: { name: 'About This Mac', color: '#1d1d1f', label: 'i', w: 360, h: 300, render: about, hidden: true }
+  };
+
+  function open(which) {
+    model = which || 'MacBook Pro';
+    css();
+    if (overlay) overlay.remove();
+    overlay = document.createElement('div');
+    overlay.id = 'macdemo';
+    if (store('get', 'macdemo-dark') === '1') overlay.classList.add('dark');
+    overlay.innerHTML = `
+      <button class="md-leave" type="button">Leave demo (Esc)</button>
+      <div class="md-screen">
+        <div class="md-wall"></div>
+        <div class="md-menubar"><button data-act="apple">${appleIcon(14)}</button><b class="md-app">Finder</b><span>File</span><span>Edit</span><span>View</span><span>Window</span><span>Help</span>
+          <div class="md-right"><button data-act="spot">Search</button><span class="md-clock"></span></div></div>
+        <div class="md-applemenu"><div data-menu="about">About This Mac</div><div data-menu="settings">System Settings...</div><div data-menu="spot">Spotlight</div><div data-menu="leave">Leave demo</div></div>
+        <div class="md-spot"><input placeholder="Spotlight Search" /><section></section></div>
+        <div class="md-dock">${Object.entries(APPS).filter(([, app]) => !app.hidden).map(([key, app]) => `<button data-app="${key}" title="${app.name}" style="background:${app.color}">${esc(app.label)}</button>`).join('')}</div>
+      </div>`;
+    document.body.appendChild(overlay);
+    applyWallpaper();
+    // Keys typed in the demo never reach the game (no walking, no shortcuts)
+    ['keydown', 'keyup', 'keypress'].forEach((type) => overlay.addEventListener(type, (event) => {
+      event.stopPropagation();
+      if (type !== 'keydown') return;
+      if (event.key === 'Escape') { if (spotOpen()) toggleSpot(false); else close(); }
+      if (event.key === ' ' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); toggleSpot(); }
+    }));
+    overlay.tabIndex = -1;
+    overlay.focus();
+    overlay.querySelector('.md-leave').addEventListener('click', close);
+    overlay.querySelector('[data-act="apple"]').addEventListener('click', () => { const menu = overlay.querySelector('.md-applemenu'); menu.style.display = menu.style.display === 'block' ? 'none' : 'block'; });
+    overlay.querySelector('[data-act="spot"]').addEventListener('click', () => toggleSpot());
+    overlay.querySelectorAll('[data-menu]').forEach((item) => item.addEventListener('click', () => {
+      overlay.querySelector('.md-applemenu').style.display = 'none';
+      const act = item.dataset.menu;
+      if (act === 'leave') close(); else if (act === 'spot') toggleSpot(); else launch(act);
+    }));
+    overlay.querySelectorAll('.md-dock button').forEach((button) => button.addEventListener('click', () => launch(button.dataset.app)));
+    const spotInput = overlay.querySelector('.md-spot input');
+    spotInput.addEventListener('input', renderSpot);
+    spotInput.addEventListener('keydown', (event) => { if (event.key === 'Enter') { const first = overlay.querySelector('.md-spot section div'); if (first) first.click(); } });
+    tick();
+    launch('finder');
+  }
+
+  function close() {
+    if (overlay) overlay.remove();
+    overlay = null;
+  }
+
+  function tick() {
+    if (!overlay) return;
+    const now = new Date();
+    overlay.querySelector('.md-clock').textContent = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) + '  ' + now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    setTimeout(tick, 15000);
+  }
+
+  function applyWallpaper() {
+    const name = store('get', 'macdemo-wallpaper') || 'Tahoe';
+    overlay.querySelector('.md-wall').style.background = WALLPAPERS[name] || WALLPAPERS.Tahoe;
+  }
+
+  const spotOpen = () => overlay && overlay.querySelector('.md-spot').style.display === 'block';
+  function toggleSpot(force) {
+    const spot = overlay.querySelector('.md-spot');
+    const show = force === undefined ? spot.style.display !== 'block' : force;
+    spot.style.display = show ? 'block' : 'none';
+    if (show) { const input = spot.querySelector('input'); input.value = ''; renderSpot(); input.focus(); }
+  }
+  function renderSpot() {
+    const query = overlay.querySelector('.md-spot input').value.trim().toLowerCase();
+    const section = overlay.querySelector('.md-spot section');
+    const results = Object.entries(APPS).filter(([, app]) => !query || app.name.toLowerCase().includes(query));
+    let math = null;
+    if (/^[\d\s+\-*/().%]+$/.test(query) && /\d/.test(query)) { try { math = Function(`"use strict"; return (${query})`)(); } catch (error) { math = null; } }
+    section.innerHTML = (typeof math === 'number' && isFinite(math) ? `<div data-math="1">= ${esc(math)}</div>` : '') + results.map(([key, app]) => `<div data-app="${key}">${esc(app.name)}</div>`).join('') + (query ? `<div data-web="1">Search the web for "${esc(query)}"</div>` : '');
+    section.querySelectorAll('div').forEach((row, index) => {
+      if (!index) row.classList.add('sel');
+      row.addEventListener('click', () => {
+        toggleSpot(false);
+        if (row.dataset.app) launch(row.dataset.app);
+        if (row.dataset.web) window.open(`https://duckduckgo.com/?q=${encodeURIComponent(query)}`, '_blank', 'noopener');
+      });
+    });
+  }
+
+  function launch(key) {
+    const app = APPS[key];
+    if (!app) return;
+    const existing = overlay.querySelector(`.md-win[data-app="${key}"]`);
+    if (existing) { existing.style.display = 'flex'; existing.style.zIndex = ++zTop; return; }
+    const screen = overlay.querySelector('.md-screen');
+    const count = overlay.querySelectorAll('.md-win').length;
+    const win = document.createElement('div');
+    win.className = 'md-win';
+    win.dataset.app = key;
+    win.style.width = `${app.w}px`;
+    win.style.height = `${app.h}px`;
+    win.style.left = `${60 + count * 36}px`;
+    win.style.top = `${50 + count * 30}px`;
+    win.style.zIndex = ++zTop;
+    win.innerHTML = `<div class="md-title"><span class="md-dot" data-act="close" style="background:#ff5f57"></span><span class="md-dot" data-act="min" style="background:#febc2e"></span><span class="md-dot" data-act="max" style="background:#28c840"></span><span class="md-name">${esc(app.name)}</span></div><div class="md-body"></div>`;
+    screen.appendChild(win);
+    app.render(win.querySelector('.md-body'));
+    overlay.querySelector('.md-app').textContent = app.name;
+    const dockButton = overlay.querySelector(`.md-dock [data-app="${key}"]`);
+    if (dockButton) dockButton.classList.add('open');
+    win.addEventListener('pointerdown', () => { win.style.zIndex = ++zTop; overlay.querySelector('.md-app').textContent = app.name; });
+    win.querySelector('[data-act="close"]').addEventListener('click', () => { win.remove(); if (dockButton) dockButton.classList.remove('open'); });
+    win.querySelector('[data-act="min"]').addEventListener('click', () => { win.style.display = 'none'; });
+    win.querySelector('[data-act="max"]').addEventListener('click', () => {
+      const max = win.dataset.max !== '1';
+      win.dataset.max = max ? '1' : '0';
+      Object.assign(win.style, max ? { left: '0px', top: '26px', width: '100%', height: 'calc(100% - 26px - 72px)' } : { left: '80px', top: '60px', width: `${app.w}px`, height: `${app.h}px` });
+    });
+    // Drag by the title bar
+    const title = win.querySelector('.md-title');
+    title.addEventListener('pointerdown', (event) => {
+      if (event.target.classList.contains('md-dot')) return;
+      const start = { x: event.clientX, y: event.clientY, left: win.offsetLeft, top: win.offsetTop };
+      const move = (e) => { win.style.left = `${start.left + e.clientX - start.x}px`; win.style.top = `${Math.max(26, start.top + e.clientY - start.y)}px`; };
+      const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+    });
+  }
+
+  function finder(body) {
+    let path = '/Users/dev';
+    body.innerHTML = '<div class="md-finder"><aside><div data-go="/Users/dev">dev</div><div data-go="/Users/dev/Desktop">Desktop</div><div data-go="/Users/dev/Documents">Documents</div><div data-go="/Users/dev/Downloads">Downloads</div><div data-go="/Users/dev/Projects">Projects</div><div data-go="apps">Applications</div></aside><div class="md-files"></div></div>';
+    const files = body.querySelector('.md-files');
+    const show = () => {
+      if (path === 'apps') {
+        files.innerHTML = Object.entries(APPS).map(([key, app]) => `<div data-app="${key}">${esc(app.name)}.app</div>`).join('');
+      } else {
+        files.innerHTML = `<p style="opacity:.6;margin:0 0 6px">${esc(path)}</p>` + (FILES[path] || []).map((name) => `<div data-name="${esc(name)}">${FILES[`${path}/${name}`] ? '[folder] ' : ''}${esc(name)}</div>`).join('');
+      }
+      files.querySelectorAll('[data-app]').forEach((row) => row.addEventListener('dblclick', () => launch(row.dataset.app)));
+      files.querySelectorAll('[data-name]').forEach((row) => row.addEventListener('dblclick', () => {
+        const next = `${path}/${row.dataset.name}`;
+        if (FILES[next]) { path = next; show(); }
+        else if (TEXT[next]) { launch('notes'); const area = overlay.querySelector('.md-win[data-app="notes"] textarea'); if (area) area.value = TEXT[next]; }
+      }));
+    };
+    body.querySelectorAll('[data-go]').forEach((item) => item.addEventListener('click', () => { path = item.dataset.go; show(); }));
+    show();
+  }
+
+  function safari(body) {
+    const favorites = [['GitHub', 'https://github.com', '#24292f'], ['Apple', 'https://www.apple.com', '#1d1d1f'], ['MDN', 'https://developer.mozilla.org', '#0b4fa8'], ['Wikipedia', 'https://www.wikipedia.org', '#555'], ['Stack Overflow', 'https://stackoverflow.com', '#f48024'], ['Hacker News', 'https://news.ycombinator.com', '#ff6600'], ['YouTube', 'https://www.youtube.com', '#e62117'], ['Swift', 'https://www.swift.org', '#f05138']];
+    body.innerHTML = `<div class="md-safari"><input placeholder="Search or enter website name" /><h3 style="margin:16px 0 0">Favorites</h3><div class="md-favs">${favorites.map(([name, url, color]) => `<a href="${url}" target="_blank" rel="noopener"><b style="background:${color}">${esc(name[0])}</b>${esc(name)}</a>`).join('')}</div><p style="opacity:.6">Sites open in a new browser tab.</p></div>`;
+    const input = body.querySelector('input');
+    input.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' || !input.value.trim()) return;
+      const value = input.value.trim();
+      const url = /^https?:\/\//.test(value) ? value : /\.[a-z]{2,}(\/|$)/i.test(value) ? `https://${value}` : `https://duckduckgo.com/?q=${encodeURIComponent(value)}`;
+      window.open(url, '_blank', 'noopener');
+    });
+  }
+
+  function terminal(body) {
+    let cwd = '/Users/dev';
+    body.style.padding = '0';
+    body.innerHTML = '<div class="md-term"></div>';
+    const term = body.querySelector('.md-term');
+    let history = `Last login: ${new Date().toDateString()} on ttys001\n`;
+    const prompt = () => `dev@${model.replace(/\s+/g, '-')} ${cwd === '/Users/dev' ? '~' : cwd.split('/').pop()} % `;
+    const commands = {
+      help: () => 'Commands: ls, cd, pwd, cat, echo, whoami, date, uname, sw_vers, neofetch, open, brew, git, node, python3, clear, exit',
+      ls: () => (FILES[cwd] || []).join('   '),
+      pwd: () => cwd,
+      whoami: () => 'dev',
+      date: () => new Date().toString(),
+      uname: (args) => (args[0] === '-a' ? `Darwin ${model} 26.0.0 Darwin Kernel arm64` : 'Darwin'),
+      sw_vers: () => 'ProductName:    macOS\nProductVersion: 26.0 (Tahoe)\nBuildVersion:   26A100',
+      echo: (args) => args.join(' '),
+      cat: (args) => TEXT[`${cwd}/${args[0]}`] || `cat: ${args[0] || ''}: No such file or directory`,
+      cd: (args) => {
+        const target = !args[0] || args[0] === '~' ? '/Users/dev' : args[0] === '..' ? cwd.split('/').slice(0, -1).join('/') || '/Users/dev' : `${cwd}/${args[0]}`;
+        if (FILES[target]) { cwd = target; return ''; }
+        return `cd: no such file or directory: ${args[0]}`;
+      },
+      neofetch: () => `                    dev@${model}\n        .:'         -----------\n    __ :'__         OS: macOS 26 Tahoe arm64\n .'\`  \`-'  \`\`.     Host: ${model}\n:          .-'      Chip: Apple M6\n:         :         Memory: 24 GB\n :         \`-;      Shell: zsh 5.9\n  \`.__.-.__.'       Terminal: Terminal.app`,
+      open: (args) => { const app = Object.keys(APPS).find((key) => APPS[key].name.toLowerCase().replace(/\s+/g, '') === (args[args.indexOf('-a') + 1] || args[0] || '').toLowerCase()); if (app) { launch(app); return ''; } return 'Usage: open -a <Finder|Safari|Notes|Calculator>'; },
+      brew: (args) => (args[0] === 'install' && args[1] ? `==> Downloading ${args[1]}\n==> Pouring ${args[1]}--latest.arm64_tahoe.bottle.tar.gz\n🍺  ${args[1]} was successfully installed!`.replace('🍺  ', '') : 'Example usage:\n  brew install FORMULA'),
+      git: (args) => (args[0] === 'status' ? 'On branch main\nYour branch is up to date with \'origin/main\'.\n\nnothing to commit, working tree clean' : args[0] === 'log' ? 'commit 1a0289d (HEAD -> main)\n    GitHub Multiverse v8' : `git version 2.47.0`),
+      node: () => 'v22.11.0',
+      python3: () => 'Python 3.13.0',
+      clear: () => { history = ''; return null; },
+      exit: () => { setTimeout(() => { const win = body.closest('.md-win'); if (win) win.remove(); }, 50); return '[Process completed]'; }
+    };
+    const render = () => {
+      term.innerHTML = `${esc(history)}${esc(prompt())}<input spellcheck="false" />`;
+      const input = term.querySelector('input');
+      input.focus();
+      term.scrollTop = term.scrollHeight;
+      input.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') return;
+        const line = input.value;
+        const [name, ...args] = line.trim().split(/\s+/);
+        history += `${prompt()}${line}\n`;
+        if (name) {
+          const result = commands[name] ? commands[name](args) : `zsh: command not found: ${name}`;
+          if (result) history += `${result}\n`;
+        }
+        render();
+      });
+    };
+    term.addEventListener('click', () => { const input = term.querySelector('input'); if (input) input.focus(); });
+    render();
+  }
+
+  function notes(body) {
+    body.innerHTML = '<textarea placeholder="Start typing..."></textarea>';
+    const area = body.querySelector('textarea');
+    area.value = store('get', 'macdemo-notes') || '';
+    area.addEventListener('input', () => store('set', 'macdemo-notes', area.value));
+    area.focus();
+  }
+
+  function calculator(body) {
+    body.style.background = '#1c1c1e';
+    body.innerHTML = `<div class="md-calc"><div class="md-display">0</div>${['AC', '+/-', '%', '/', '7', '8', '9', '*', '4', '5', '6', '-', '1', '2', '3', '+', '0', '.', '=', '<'].map((key) => `<button class="${/[/*\-+=]/.test(key) ? 'op' : ''}">${key}</button>`).join('')}</div>`;
+    const display = body.querySelector('.md-display');
+    let expression = '';
+    const show = (value) => { display.textContent = value || '0'; };
+    body.querySelectorAll('button').forEach((button) => button.addEventListener('click', () => {
+      const key = button.textContent;
+      if (key === 'AC') expression = '';
+      else if (key === '<') expression = expression.slice(0, -1);
+      else if (key === '+/-') expression = expression.startsWith('-') ? expression.slice(1) : `-${expression}`;
+      else if (key === '=') {
+        try { const value = Function(`"use strict"; return (${expression.replace(/%/g, '/100')})`)(); expression = isFinite(value) ? String(Math.round(value * 1e10) / 1e10) : 'Error'; } catch (error) { expression = 'Error'; }
+      } else expression = (expression === 'Error' ? '' : expression) + key;
+      show(expression);
+    }));
+  }
+
+  function settings(body) {
+    const current = store('get', 'macdemo-wallpaper') || 'Tahoe';
+    body.innerHTML = `<h3 style="margin-top:0">Wallpaper</h3>${Object.entries(WALLPAPERS).map(([name, value]) => `<span class="md-swatch${name === current ? ' sel' : ''}" data-wall="${name}" title="${name}" style="background:${value}"></span>`).join('')}<h3>Appearance</h3><label><input type="checkbox" class="md-darkmode" ${overlay.classList.contains('dark') ? 'checked' : ''}/> Dark mode</label>`;
+    body.querySelectorAll('[data-wall]').forEach((swatch) => swatch.addEventListener('click', () => {
+      store('set', 'macdemo-wallpaper', swatch.dataset.wall);
+      body.querySelectorAll('[data-wall]').forEach((other) => other.classList.toggle('sel', other === swatch));
+      applyWallpaper();
+    }));
+    body.querySelector('.md-darkmode').addEventListener('change', (event) => {
+      overlay.classList.toggle('dark', event.target.checked);
+      store('set', 'macdemo-dark', event.target.checked ? '1' : '0');
+    });
+  }
+
+  function about(body) {
+    body.innerHTML = `<div style="text-align:center"><div>${appleIcon(54)}</div><h2 style="margin:6px 0">${esc(model)}</h2><p style="opacity:.7;margin:0">16-inch, 2026</p><p>Chip: Apple M6<br>Memory: 24 GB<br>Startup disk: Macintosh HD<br>macOS Tahoe 26.0</p><p style="opacity:.5;font-size:11px">Demo unit at the House of MAC. Simulated in your browser.</p></div>`;
+  }
+
+  return { open, close, isOpen: () => Boolean(overlay) };
 })();
