@@ -1434,3 +1434,1899 @@
   PropKit.registerBuilder(/^pit_arena$/, 'pitArena', pitArena);
   PropKit.registerBuilder(/^candle_maze$/, 'candleMaze', candleMaze);
 })();
+
+// ============================================================================
+// SQUID GAME EPIC EDITION: A DEVELOPERS EDITION OF THE SURVIVAL-GAME SHOW
+// ============================================================================
+// District "squidgame" (worlds.json, map "map_squid_game.json" in
+// districts.json): a 140 x 110 m walled compound south of the Upland Gallery.
+// The look borrows the show's set design only (pastel walls, magenta and teal
+// accents, circle / triangle / square shapes everywhere, painted sky walls,
+// an Escher-like staircase maze, a dormitory of stacked bunks with a giant
+// piggy bank). There are no people figures and no character copies: the
+// guards are floating shape drones and the doll is an original CI robot whose
+// head is a traffic light. Nobody gets hurt: losing a game is "Build failed",
+// a chat message and a teleport back to the start.
+//
+// Games (all single player against the clock or a bot, all non-violent):
+//   1) Red Build, Green Build: walk on BUILD GREEN, freeze on BUILD RED.
+//   2) Regex Honeycomb: trace a shape on a honeycomb candy with the mouse.
+//   3) Merge Conflict Tug of War: press Space in rhythm against main.
+//   4) Odd or Even Commits: a marbles guessing game against a bot.
+//   5) Glass Bridge of Code Review: pick the tempered pane, trivia as hints.
+//   6) Dormitory: bunks to sleep on, the MVC piggy bank and a wins board.
+// Rewards: a win pays through the server-validated commit reward (+3 MVC,
+// rate-limited by the server), the same path the district laptops use, and
+// posts a "/me passed ..." line in chat. Every client counts those lines for
+// the piggy bank and the session leaderboard. In-game coins only.
+//
+// Blocks (all at the district origin, local coordinates, north = -z = plaza):
+// sgee_core (ground, walls, entrance logo arch, drones), sgee_redlight,
+// sgee_bridge (staircase maze + glass bridge), sgee_dorm, sgee_tug,
+// sgee_honeycomb, sgee_marbles.
+(() => {
+  const { material, glow, mesh, box, cylinder, sphere, animate, textSprite, interactive, labelTexture } = PropKit.kit;
+
+  // --------------------------------------------------------------------------
+  // Palette, shared state and small helpers
+  // --------------------------------------------------------------------------
+  const PINK = '#e6007e';
+  const HOT = '#ff2e88';
+  const TEAL = '#14a39a';
+  const PASTEL = { pink: '#f6b8cc', mint: '#bfe6d6', yellow: '#f8e3a0', lilac: '#d9c9f1', sky: '#bfe3f7', cream: '#f7efe4' };
+  const REWARD_MVC = 3; // what the server pays for one commit (one win)
+  const STORE_KEY = 'multiverse-squidgame';
+  const GAMES = { rl: 'Red Build, Green Build', honey: 'Regex Honeycomb', tug: 'Merge Conflict Tug of War', marbles: 'Odd or Even Commits', bridge: 'Glass Bridge of Code Review' };
+  const WIN_LINE = /^\/me passed (.+) in Squid Game Epic Edition/;
+
+  function seeded(seed) {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const noRay = (object) => { object.traverse((node) => { node.raycast = () => {}; node.castShadow = false; }); return object; };
+  const unitBox = new THREE.BoxGeometry(1, 1, 1);
+  // Plain box (12 triangles) for walls and slabs; merged later per zone
+  function blk(parent, w, h, d, boxMaterial, x, y, z, rotationY = 0) {
+    const part = new THREE.Mesh(unitBox, boxMaterial);
+    part.scale.set(w, h, d);
+    part.position.set(x, y, z);
+    part.rotation.y = rotationY;
+    part.castShadow = Math.max(w, h, d) > 1.5;
+    part.receiveShadow = true;
+    parent.add(part);
+    return part;
+  }
+  // Static parts of a zone become one mesh per material (few draw calls)
+  function bake(group, staticGroup) {
+    const merged = PropKit.kit.mergeByMaterial(staticGroup);
+    merged.children.forEach((child) => { child.receiveShadow = true; });
+    group.add(merged);
+    return merged;
+  }
+
+  function loadStore() {
+    try { return JSON.parse(localStorage.getItem(STORE_KEY) || '{}') || {}; } catch (error) { return {}; }
+  }
+  const stored = loadStore();
+  const SG = {
+    hooks: null,
+    lifetimeWins: Number(stored.wins) || 0, // your wins on this browser (all sessions)
+    sessionWins: new Map(), // devTag -> wins seen this session (everyone)
+    myGames: {}, // game -> your wins this session
+    othersWins: 0,
+    dirty: { piggy: true, leaders: true },
+    listening: false
+  };
+  function myTag() {
+    try { if (typeof localDeveloperData !== 'undefined' && localDeveloperData && localDeveloperData.devTag) return localDeveloperData.devTag; } catch (error) { /* not ready */ }
+    return 'You';
+  }
+  function system(text) { if (SG.hooks) SG.hooks.system(text); else if (typeof appendSystemMessage === 'function') appendSystemMessage(text); }
+  function play(name) { try { if (window.Sound) Sound.play(name); } catch (error) { /* audio blocked */ } }
+  function bankMVC() { return (SG.lifetimeWins + SG.othersWins) * REWARD_MVC; }
+  function countWin(tag) {
+    SG.sessionWins.set(tag, (SG.sessionWins.get(tag) || 0) + 1);
+    SG.dirty.piggy = true;
+    SG.dirty.leaders = true;
+  }
+  // Chat lines "/me passed <game> in Squid Game Epic Edition" from other
+  // players feed the piggy bank and the leaderboard (your own wins are counted
+  // locally, so your echo is skipped)
+  function listenForWins() {
+    if (SG.listening || typeof socket === 'undefined' || !socket) return;
+    SG.listening = true;
+    const lastSeen = new Map();
+    socket.on('chat_message', (message) => {
+      if (!message || message.id === socket.id || typeof message.text !== 'string' || !WIN_LINE.test(message.text)) return;
+      const tag = String(message.devTag || 'dev').slice(0, 24);
+      const now = Date.now();
+      if (now - (lastSeen.get(tag) || 0) < 4000) return; // one win per player every few seconds
+      lastSeen.set(tag, now);
+      SG.othersWins++;
+      countWin(tag);
+    });
+  }
+
+  // A win: server-validated reward (the commit path, +3 MVC), chat line, boards
+  function award(game) {
+    const hooks = SG.hooks;
+    SG.lifetimeWins++;
+    SG.myGames[game] = (SG.myGames[game] || 0) + 1;
+    try { localStorage.setItem(STORE_KEY, JSON.stringify({ wins: SG.lifetimeWins })); } catch (error) { /* storage blocked */ }
+    countWin(myTag());
+    play('coin');
+    system(`BUILD PASSED: ${game}. +${REWARD_MVC} MVC goes to your wallet through the server commit reward, and ${REWARD_MVC} MVC drops into the dormitory piggy bank.`);
+    if (hooks) {
+      hooks.commit(12);
+      hooks.broadcast(`passed ${game} in Squid Game Epic Edition`);
+    }
+  }
+  // A loss: never violent, just a failed build and a trip back to the start
+  function buildFailed(game, reason, anchor, spot) {
+    system(`BUILD FAILED (${game}): ${reason}. Back to the start.`);
+    play('teleport');
+    if (anchor && spot) teleport(anchor, spot[0], spot[1], spot[2]);
+  }
+  function teleport(anchor, x, y, z) {
+    const target = anchor.localToWorld(new THREE.Vector3(x, y, z));
+    if (SG.hooks) SG.hooks.setAvatarPosition(target);
+    else if (typeof avatar !== 'undefined') { avatar.position.copy(target); avatar.velocityY = 0; }
+  }
+  const probe = new THREE.Vector3();
+  function avatarLocal(anchor) {
+    if (typeof avatar === 'undefined' || !avatar) return null;
+    return anchor.worldToLocal(probe.copy(avatar.position));
+  }
+  function isFlying() { try { return typeof flying !== 'undefined' && !!flying; } catch (error) { return false; } }
+  // An E-usable object running a callback (keeps the hooks for later events)
+  function action(object, label, prompt, run) {
+    object.userData.prompt = prompt;
+    object.userData.onInteract = (hooks) => { SG.hooks = hooks; listenForWins(); return run(hooks); };
+    return interactive(object, 'action', label);
+  }
+
+  // --------------------------------------------------------------------------
+  // Lazy canvases: textures are drawn the first time a player comes near
+  // (static art) or only when their content changes (live boards)
+  // --------------------------------------------------------------------------
+  const pendingArt = [];
+  function lazyTexture(width, height, draw, repeatX = 1, repeatY = 1) {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.anisotropy = 4;
+    if (repeatX !== 1 || repeatY !== 1) {
+      texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+      texture.repeat.set(repeatX, repeatY);
+    }
+    pendingArt.push({ canvas, texture, draw });
+    return texture;
+  }
+  function drawPendingArt() {
+    while (pendingArt.length) {
+      const { canvas, texture, draw } = pendingArt.shift();
+      draw(canvas.getContext('2d'), canvas.width, canvas.height);
+      texture.needsUpdate = true;
+    }
+  }
+  // Live board: redraw(state) runs only when the board is marked dirty
+  function liveBoard(width, height, draw) {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.anisotropy = 4;
+    const board = { canvas, texture, dirty: true, draw, refresh() { if (!board.dirty) return; board.dirty = false; draw(canvas.getContext('2d'), width, height); texture.needsUpdate = true; } };
+    return board;
+  }
+  const boardMaterial = (board) => new THREE.MeshBasicMaterial({ map: board.texture, toneMapped: false });
+  function plane(w, h, planeMaterial, x, y, z, rotationY = 0) {
+    const flat = mesh(new THREE.PlaneGeometry(w, h), planeMaterial, x, y, z);
+    flat.rotation.y = rotationY;
+    flat.castShadow = false;
+    return flat;
+  }
+  function floorDecal(w, d, decalMaterial, x, y, z) {
+    const flat = mesh(new THREE.PlaneGeometry(w, d), decalMaterial, x, y, z);
+    flat.rotation.x = -Math.PI / 2;
+    flat.castShadow = false;
+    flat.raycast = () => {};
+    return flat;
+  }
+
+  // Shape outlines (circle, triangle, square) as flat rings facing +z
+  const SHAPE_RINGS = [
+    new THREE.RingGeometry(0.74, 1, 40),
+    new THREE.RingGeometry(0.5, 1, 3, 1, Math.PI / 2),
+    new THREE.RingGeometry(0.66, 1, 4, 1, Math.PI / 4)
+  ];
+  // Solid extruded shapes for sculptures and pillar caps
+  function shapeSolid(kind, size, depth) {
+    const shape = new THREE.Shape();
+    if (kind === 0) shape.absarc(0, 0, size, 0, Math.PI * 2, false);
+    else {
+      const sides = kind === 1 ? 3 : 4;
+      for (let i = 0; i <= sides; i++) {
+        const angle = Math.PI / 2 + (kind === 2 ? Math.PI / 4 : 0) + (i / sides) * Math.PI * 2;
+        const px = Math.cos(angle) * size;
+        const py = Math.sin(angle) * size;
+        if (i === 0) shape.moveTo(px, py); else shape.lineTo(px, py);
+      }
+    }
+    if (kind === 0) {
+      const hole = new THREE.Path();
+      hole.absarc(0, 0, size * 0.62, 0, Math.PI * 2, true);
+      shape.holes.push(hole);
+    }
+    const geometry = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false, curveSegments: 32 });
+    geometry.translate(0, 0, -depth / 2);
+    return geometry;
+  }
+
+  // Instanced shape stencils (pink and teal) on walls: 3 draw calls in total
+  const stencils = [[], [], []];
+  function stencil(kind, x, y, z, rotationY, scale, color) { stencils[kind].push({ x, y, z, rotationY, scale, color }); }
+  function buildStencils(group) {
+    const dummy = new THREE.Object3D();
+    const color = new THREE.Color();
+    stencils.forEach((list, kind) => {
+      if (!list.length) return;
+      const instanced = new THREE.InstancedMesh(SHAPE_RINGS[kind], new THREE.MeshBasicMaterial({ color: '#ffffff', side: THREE.DoubleSide, toneMapped: false }), list.length);
+      list.forEach((item, index) => {
+        dummy.position.set(item.x, item.y, item.z);
+        dummy.rotation.set(0, item.rotationY, 0);
+        dummy.scale.setScalar(item.scale);
+        dummy.updateMatrix();
+        instanced.setMatrixAt(index, dummy.matrix);
+        instanced.setColorAt(index, color.set(item.color));
+      });
+      instanced.frustumCulled = false;
+      noRay(instanced);
+      group.add(instanced);
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // Shape drones (the guards): a black body with a glowing pink circle,
+  // triangle or square face. One instanced set for the whole district.
+  // --------------------------------------------------------------------------
+  const droneSpecs = []; // { kind, at(t) -> { x, y, z, yaw } }
+  function addDrone(kind, at) { droneSpecs.push({ kind, at }); }
+  function buildDrones(group) {
+    const capacity = 32;
+    const bodyGeometry = new THREE.SphereGeometry(0.55, 16, 10);
+    bodyGeometry.scale(1, 0.85, 0.8);
+    const bodies = new THREE.InstancedMesh(bodyGeometry, new THREE.MeshStandardMaterial({ color: '#15151b', roughness: 0.25, metalness: 0.5 }), capacity);
+    const faceMaterial = new THREE.MeshStandardMaterial({ color: HOT, emissive: HOT, emissiveIntensity: 1.8 });
+    const faces = [32, 3, 4].map((segments) => {
+      const geometry = new THREE.TorusGeometry(0.33, 0.06, 6, segments);
+      if (segments === 3) geometry.rotateZ(Math.PI / 2);
+      if (segments === 4) geometry.rotateZ(Math.PI / 4);
+      return new THREE.InstancedMesh(geometry, faceMaterial, capacity);
+    });
+    [bodies, ...faces].forEach((instanced) => { instanced.count = 0; instanced.frustumCulled = false; noRay(instanced); group.add(instanced); });
+    const dummy = new THREE.Object3D();
+    return (t) => {
+      const counts = [0, 0, 0];
+      bodies.count = Math.min(capacity, droneSpecs.length);
+      droneSpecs.slice(0, capacity).forEach((spec, index) => {
+        const { x, y, z, yaw } = spec.at(t);
+        dummy.position.set(x, y, z);
+        dummy.rotation.set(Math.sin(t * 1.3 + index) * 0.08, yaw, 0);
+        dummy.scale.setScalar(1);
+        dummy.updateMatrix();
+        bodies.setMatrixAt(index, dummy.matrix);
+        dummy.position.set(x + Math.sin(yaw) * 0.47, y + 0.02, z + Math.cos(yaw) * 0.47);
+        dummy.updateMatrix();
+        faces[spec.kind].setMatrixAt(counts[spec.kind]++, dummy.matrix);
+      });
+      faces.forEach((instanced, kind) => { instanced.count = counts[kind]; instanced.instanceMatrix.needsUpdate = true; });
+      bodies.instanceMatrix.needsUpdate = true;
+    };
+  }
+  // Game logic runs on a real clock (the animate time only ticks near the camera)
+  const clock = () => performance.now() / 1000;
+  const yawTo = (fromX, fromZ, toX, toZ) => Math.atan2(toX - fromX, toZ - fromZ);
+
+  // --------------------------------------------------------------------------
+  // Canvas art (drawn lazily)
+  // --------------------------------------------------------------------------
+  function drawSky(ctx, w, h) {
+    const random = seeded(456);
+    const gradient = ctx.createLinearGradient(0, 0, 0, h);
+    gradient.addColorStop(0, '#7cc8f2');
+    gradient.addColorStop(0.7, '#bfe6fb');
+    gradient.addColorStop(1, '#e3f4fd');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, w, h);
+    for (let c = 0; c < 7; c++) {
+      const cx = (c + 0.3 + random() * 0.4) * (w / 7);
+      const cy = h * (0.18 + random() * 0.45);
+      const size = 26 + random() * 26;
+      for (let p = 0; p < 7; p++) {
+        const px = cx + (p - 3) * size * 0.7 + (random() - 0.5) * 10;
+        const py = cy - Math.sin((p / 6) * Math.PI) * size * 0.6;
+        const r = size * (0.7 + random() * 0.5);
+        ctx.fillStyle = 'rgba(176, 200, 222, 0.9)';
+        ctx.beginPath(); ctx.arc(px + 3, py + 6, r, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    // Painted look: soft brush noise and a faint seam at the panel edges
+    const image = ctx.getImageData(0, 0, w, h);
+    for (let i = 0; i < image.data.length; i += 4) {
+      const n = (random() - 0.5) * 8;
+      image.data[i] += n; image.data[i + 1] += n; image.data[i + 2] += n;
+    }
+    ctx.putImageData(image, 0, 0);
+    ctx.fillStyle = 'rgba(80, 110, 140, 0.18)';
+    ctx.fillRect(0, 0, 2, h);
+    ctx.fillRect(w / 2 - 1, 0, 2, h);
+  }
+  function drawTiles(ctx, w, h) {
+    const random = seeded(67);
+    const colors = ['#f6e7da', '#f9dbe5', '#dff1ea', '#f3ecc9'];
+    const tile = w / 4;
+    for (let row = 0; row < 4; row++) {
+      for (let col = 0; col < 4; col++) {
+        ctx.fillStyle = colors[(row + col * 3) % 4];
+        ctx.fillRect(col * tile, row * tile, tile, tile);
+        if ((row * 4 + col) % 3 === 0) {
+          ctx.strokeStyle = (row + col) % 2 ? 'rgba(230, 0, 126, 0.16)' : 'rgba(20, 163, 154, 0.18)';
+          ctx.lineWidth = 6;
+          const cx = col * tile + tile / 2;
+          const cy = row * tile + tile / 2;
+          const kind = (row + col) % 3;
+          ctx.beginPath();
+          if (kind === 0) ctx.arc(cx, cy, tile * 0.28, 0, Math.PI * 2);
+          else if (kind === 1) { ctx.moveTo(cx, cy - tile * 0.3); ctx.lineTo(cx + tile * 0.28, cy + tile * 0.22); ctx.lineTo(cx - tile * 0.28, cy + tile * 0.22); ctx.closePath(); } else ctx.rect(cx - tile * 0.24, cy - tile * 0.24, tile * 0.48, tile * 0.48);
+          ctx.stroke();
+        }
+      }
+    }
+    ctx.strokeStyle = '#d9c7b8';
+    ctx.lineWidth = 4;
+    for (let i = 0; i <= 4; i++) {
+      ctx.beginPath(); ctx.moveTo(i * tile, 0); ctx.lineTo(i * tile, h); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, i * tile); ctx.lineTo(w, i * tile); ctx.stroke();
+    }
+    const image = ctx.getImageData(0, 0, w, h);
+    for (let i = 0; i < image.data.length; i += 4) {
+      const n = (random() - 0.5) * 12;
+      image.data[i] += n; image.data[i + 1] += n; image.data[i + 2] += n;
+    }
+    ctx.putImageData(image, 0, 0);
+  }
+  function drawSand(ctx, w, h) {
+    const random = seeded(808);
+    ctx.fillStyle = '#e4cc9c';
+    ctx.fillRect(0, 0, w, h);
+    const image = ctx.getImageData(0, 0, w, h);
+    for (let i = 0; i < image.data.length; i += 4) {
+      const n = (random() - 0.5) * 30;
+      image.data[i] += n; image.data[i + 1] += n * 0.9; image.data[i + 2] += n * 0.7;
+    }
+    ctx.putImageData(image, 0, 0);
+    for (let i = 0; i < 260; i++) {
+      ctx.fillStyle = `rgba(${120 + random() * 60}, ${100 + random() * 40}, ${70 + random() * 30}, 0.5)`;
+      ctx.beginPath(); ctx.arc(random() * w, random() * h, 1 + random() * 2.5, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  function textCanvas(ctx, w, h, { bg, fg, title, sub, border }) {
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, w, h);
+    if (border) { ctx.strokeStyle = border; ctx.lineWidth = Math.max(6, h * 0.04); ctx.strokeRect(0, 0, w, h); }
+    ctx.fillStyle = fg;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `bold ${Math.round(h * (sub ? 0.36 : 0.5))}px Segoe UI, Arial, sans-serif`;
+    ctx.fillText(title, w / 2, sub ? h * 0.4 : h / 2, w * 0.94);
+    if (sub) {
+      ctx.font = `${Math.round(h * 0.16)}px Segoe UI, Arial, sans-serif`;
+      ctx.fillText(sub, w / 2, h * 0.78, w * 0.94);
+    }
+  }
+  function signPlane(w, h, options, x, y, z, rotationY = 0) {
+    const texture = lazyTexture(512, Math.round(512 * (h / w)), (ctx, cw, ch) => textCanvas(ctx, cw, ch, options));
+    return plane(w, h, new THREE.MeshBasicMaterial({ map: texture, toneMapped: false }), x, y, z, rotationY);
+  }
+
+  // Sky wall: a painted sky-and-clouds plane (texture = 24 m x 12 m)
+  const skyMaterial = new THREE.MeshStandardMaterial({ map: lazyTexture(1024, 512, drawSky), roughness: 0.95 });
+  skyMaterial.map.wrapS = THREE.RepeatWrapping;
+  function skyWall(parent, length, height, x, y, z, rotationY) {
+    const geometry = new THREE.PlaneGeometry(length, height);
+    const uv = geometry.attributes.uv;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * (length / 24), uv.getY(i) * (height / 12));
+    const wall = new THREE.Mesh(geometry, skyMaterial);
+    wall.position.set(x, y, z);
+    wall.rotation.y = rotationY;
+    wall.receiveShadow = true;
+    parent.add(wall);
+    return wall;
+  }
+
+  // ==========================================================================
+  // CORE: ground, perimeter walls, the logo arch, sculptures, drones, info
+  // ==========================================================================
+  const HALF_X = 70;
+  const HALF_Z = 55;
+  function sgCore(group) {
+    const S = new THREE.Group();
+    // Pastel tile ground (5 m tiles with faint shape stencils)
+    const ground = new THREE.Mesh(new THREE.BoxGeometry(HALF_X * 2, 0.3, HALF_Z * 2), new THREE.MeshStandardMaterial({ map: lazyTexture(512, 512, drawTiles, 28, 22), roughness: 0.85 }));
+    ground.position.y = -0.15;
+    ground.receiveShadow = true;
+    group.add(ground);
+
+    // Perimeter: pastel pink walls with a teal coping; the gate opens north
+    const wall = material(PASTEL.pink, { roughness: 0.85 });
+    const coping = material(TEAL, { roughness: 0.6 });
+    const H = 6;
+    [[-HALF_X, -8], [8, HALF_X]].forEach(([a, b]) => {
+      blk(S, b - a, H, 0.8, wall, (a + b) / 2, H / 2, -HALF_Z + 0.4);
+      blk(S, b - a, 0.3, 1.1, coping, (a + b) / 2, H + 0.15, -HALF_Z + 0.4);
+    });
+    blk(S, HALF_X * 2, H, 0.8, wall, 0, H / 2, HALF_Z - 0.4);
+    blk(S, HALF_X * 2, 0.3, 1.1, coping, 0, H + 0.15, HALF_Z - 0.4);
+    [-1, 1].forEach((side) => {
+      blk(S, 0.8, H, HALF_Z * 2, wall, side * (HALF_X - 0.4), H / 2, 0);
+      blk(S, 1.1, 0.3, HALF_Z * 2, coping, side * (HALF_X - 0.4), H + 0.15, 0);
+    });
+    // Shape stencils on the outer faces of the perimeter
+    let k = 0;
+    for (let x = -64; x <= 64; x += 12) {
+      if (Math.abs(x) > 20) stencil(k % 3, x, 3.2, -HALF_Z - 0.05, Math.PI, 1.3, k % 2 ? TEAL : PINK);
+      stencil((k + 1) % 3, x, 3.2, HALF_Z + 0.05, 0, 1.3, k % 2 ? PINK : TEAL);
+      k++;
+    }
+    for (let z = -48; z <= 48; z += 12) {
+      stencil(k % 3, -HALF_X - 0.05, 3.2, z, -Math.PI / 2, 1.3, k % 2 ? TEAL : PINK);
+      stencil((k + 2) % 3, HALF_X + 0.05, 3.2, z, Math.PI / 2, 1.3, k % 2 ? PINK : TEAL);
+      k++;
+    }
+
+    // Entrance arch: two teal pillars and the giant logo billboard over the gate
+    const pillar = material(TEAL, { roughness: 0.5 });
+    const frame = material('#1d1d24', { roughness: 0.4, metalness: 0.3 });
+    [-17, 17].forEach((x) => {
+      blk(S, 2.6, 26, 2.6, pillar, x, 13, -HALF_Z + 0.4);
+      blk(S, 3.2, 0.6, 3.2, frame, x, 26.3, -HALF_Z + 0.4);
+    });
+    const logoWidth = 30;
+    const logoHeight = logoWidth * (768 / 1376);
+    const logoY = 6.8 + logoHeight / 2;
+    blk(S, logoWidth + 1.4, logoHeight + 1.4, 0.8, frame, 0, logoY, -HALF_Z + 0.4);
+    blk(S, logoWidth + 4, 0.8, 1.6, pillar, 0, logoY + logoHeight / 2 + 1.1, -HALF_Z + 0.4);
+    const logoMaterial = new THREE.MeshBasicMaterial({ color: '#ffffff', toneMapped: false });
+    const front = plane(logoWidth, logoHeight, logoMaterial, 0, logoY, -HALF_Z - 0.03, Math.PI);
+    const back = plane(logoWidth, logoHeight, logoMaterial, 0, logoY, -HALF_Z + 0.83, 0);
+    group.add(front, back);
+    // Neon circle, triangle and square on top of the arch
+    const neon = glow(HOT, 2.2);
+    [[-8, 0], [0, 1], [8, 2]].forEach(([x, kind]) => {
+      const shape = mesh(shapeSolid(kind, 2.4, 0.5), neon, x, logoY + logoHeight / 2 + 4.2, -HALF_Z + 0.4);
+      shape.castShadow = false;
+      S.add(shape);
+    });
+    // Big pastel sculptures on the entrance plaza (walkable around, collidable)
+    [[24, 0, PINK], [33, 1, TEAL], [42, 2, PINK], [-24, 2, TEAL]].forEach(([x, kind, color]) => {
+      const sculpture = mesh(shapeSolid(kind, 2.2, 0.9), material(color, { roughness: 0.4 }), x, 2.6, -47);
+      S.add(sculpture);
+      blk(S, 3.2, 0.3, 1.6, material(PASTEL.cream), x, 0.15, -47);
+    });
+    // Welcome desk: rules and controls of every game (E)
+    const desk = new THREE.Group();
+    desk.position.set(10, 0, -47);
+    blk(desk, 3.4, 1.1, 1.2, material(PASTEL.mint), 0, 0.55, 0);
+    blk(desk, 3.6, 0.12, 1.4, material(PINK), 0, 1.16, 0);
+    desk.add(plane(3.2, 1.8, logoMaterial, 0, 2.3, -0.2, Math.PI));
+    blk(desk, 3.4, 2, 0.15, frame, 0, 2.3, -0.12);
+    desk.userData.label = 'Squid Game Epic Edition: rules';
+    desk.userData.info = 'A developers edition with no one hurt. Losing = BUILD FAILED and a teleport back to the start. Winning pays +3 MVC through the server commit reward and fills the dormitory piggy bank. ' +
+      'RED BUILD, GREEN BUILD (west field): E at the start kiosk, walk on BUILD GREEN, freeze on BUILD RED, cross the finish line. ' +
+      'REGEX HONEYCOMB (south stall): E at a table, pick a shape, hold the mouse button and trace the groove; leave the line and the candy cracks. ' +
+      'MERGE CONFLICT TUG OF WAR (south-east): climb to YOUR BRANCH, E at the console, press Space when the marker is inside the green zone (off-beat presses slip). ' +
+      'ODD OR EVEN COMMITS (marble alley): E at the table, pick a bet and guess odd or even. ' +
+      'GLASS BRIDGE OF CODE REVIEW (staircase maze, center): climb the pastel stairs or take the lift, E at the console to start a crossing; the review board says which pane is tempered. ' +
+      'DORMITORY (east): sleep on a bunk, watch the MVC piggy bank and the wins board. Esc closes any mini game.';
+    interactive(desk, 'inspect', 'Squid Game Epic Edition: rules');
+    group.add(desk);
+    const welcome = textSprite('Squid Game Epic Edition', { width: 12, background: 'rgba(230, 0, 126, 0.88)' });
+    welcome.position.set(10, 4.6, -47);
+    group.add(welcome);
+
+    // Zone signposts
+    [['Red Build, Green Build', -50, -43], ['Staircase maze and Glass Bridge', -19, -41], ['Dormitory', 16, -41.5], ['Tug of War', 25, 10], ['Regex Honeycomb', 6, 31], ['Odd or Even Commits', 6, 47]].forEach(([text, x, z]) => {
+      const sign = textSprite(text, { width: 8, background: 'rgba(20, 163, 154, 0.88)' });
+      sign.position.set(x, 4.2, z);
+      group.add(sign);
+    });
+
+    // Drones that greet arrivals at the gate
+    [-1, 1].forEach((side, index) => addDrone(index, (t) => ({ x: side * 10, y: 4.2 + Math.sin(t * 1.6 + index) * 0.3, z: -50 + Math.sin(t * 0.4 + index * 2) * 3, yaw: Math.PI })));
+
+    buildStencils(group);
+    bake(group, S);
+    const updateDrones = buildDrones(group);
+
+    let logoLoaded = false;
+    animate(group, (t) => {
+      if (!logoLoaded) {
+        logoLoaded = true;
+        new THREE.TextureLoader().load('assets/squid-game-logo.jpg', (texture) => {
+          texture.encoding = THREE.sRGBEncoding;
+          texture.anisotropy = 8;
+          logoMaterial.map = texture;
+          logoMaterial.needsUpdate = true;
+        });
+      }
+      if (pendingArt.length) drawPendingArt();
+      listenForWins();
+      updateDrones(t);
+    });
+  }
+
+  // ==========================================================================
+  // 1) RED BUILD, GREEN BUILD: the field with the CI traffic-light robot
+  // ==========================================================================
+  const FIELD = { x0: -69, x1: -31, z0: -40, z1: 54, cx: -50, start: -30, finish: 38 };
+  function sgRedLight(group) {
+    const S = new THREE.Group();
+    const { x0, x1, z0, z1, cx } = FIELD;
+    const length = z1 - z0;
+    // Sandy field
+    const sand = mesh(new THREE.BoxGeometry(x1 - x0, 0.06, length), new THREE.MeshStandardMaterial({ map: lazyTexture(512, 512, drawSand, 6, 14), roughness: 1 }), cx, 0.03, (z0 + z1) / 2);
+    sand.castShadow = false;
+    group.add(sand);
+    // 12 m walls painted with sky and clouds on the inside
+    const outer = material(PASTEL.pink, { roughness: 0.85 });
+    const WH = 12;
+    blk(S, 0.6, WH, length, outer, x0 - 0.5, WH / 2, (z0 + z1) / 2);
+    blk(S, 0.8, WH, length, outer, x1 + 0.4, WH / 2, (z0 + z1) / 2);
+    blk(S, x1 - x0, WH, 0.6, outer, cx, WH / 2, z1 + 0.2);
+    // North wall with a 12 m gate in the middle
+    [[x0 - 0.8, cx - 6], [cx + 6, x1 + 0.8]].forEach(([a, b]) => blk(S, b - a, WH, 0.8, outer, (a + b) / 2, WH / 2, z0));
+    skyWall(S, length, WH, x0 - 0.18, WH / 2, (z0 + z1) / 2, Math.PI / 2);
+    skyWall(S, length, WH, x1 - 0.02, WH / 2, (z0 + z1) / 2, -Math.PI / 2);
+    skyWall(S, x1 - x0, WH, cx, WH / 2, z1 - 0.12, Math.PI);
+    [[x0, cx - 6], [cx + 6, x1]].forEach(([a, b]) => skyWall(S, b - a, WH, (a + b) / 2, WH / 2, z0 + 0.42, 0));
+    blk(S, x1 - x0 + 1.6, 0.4, 1.2, material(TEAL), cx, WH + 0.2, z0);
+    // Start and finish lines, lane flags
+    blk(S, x1 - x0, 0.04, 0.6, material('#ffffff', { roughness: 0.6 }), cx, 0.08, FIELD.start);
+    for (let i = 0; i < 19; i++) blk(S, 2, 0.04, 1.2, material(i % 2 ? PINK : TEAL), x0 + 1 + i * 2, 0.08, FIELD.finish);
+    group.add(floorDecal(10, 2.4, new THREE.MeshBasicMaterial({ map: labelTexture('START', { bg: 'rgba(0,0,0,0)', fg: '#ffffff', width: 512, height: 128, font: 'bold 96px Segoe UI, Arial, sans-serif' }), transparent: true, toneMapped: false }), cx, 0.1, FIELD.start - 2));
+    group.add(floorDecal(18, 2.6, new THREE.MeshBasicMaterial({ map: labelTexture('FINISH: BUILD PASSED', { bg: 'rgba(0,0,0,0)', fg: PINK, width: 1024, height: 128, font: 'bold 92px Segoe UI, Arial, sans-serif' }), transparent: true, toneMapped: false }), cx, 0.1, FIELD.finish - 2.4));
+    for (let z = z0 + 8; z < z1 - 4; z += 10) {
+      [x0 + 1.2, x1 - 1.2].forEach((x, side) => {
+        blk(S, 0.12, 2.4, 0.12, material('#f7f7f7'), x, 1.2, z);
+        blk(S, 0.05, 0.6, 0.9, material(side ? PINK : TEAL), x, 2.1, z + 0.45);
+      });
+    }
+
+    // ---- The CI robot: an original traffic-light-headed robot, 15 m tall ----
+    const robot = new THREE.Group();
+    robot.position.set(cx, 0, 47);
+    const shell = material('#e9eef2', { roughness: 0.35, metalness: 0.2 });
+    const joint = material('#3a3f4a', { roughness: 0.4, metalness: 0.6 });
+    const tealShell = material(TEAL, { roughness: 0.4, metalness: 0.2 });
+    [-1.5, 1.5].forEach((x) => {
+      robot.add(box(1.8, 0.9, 2.8, tealShell, x, 0.45, -0.2));
+      robot.add(cylinder(0.6, 0.7, 3.6, joint, x, 2.7, 0, 16));
+      robot.add(sphere(0.75, joint, x, 4.6, 0, 14));
+    });
+    robot.add(box(4.8, 1.6, 2.8, tealShell, 0, 5.4, 0));
+    robot.add(box(4.6, 4.2, 2.8, shell, 0, 8.3, 0));
+    [-1, 1].forEach((side) => {
+      robot.add(sphere(0.8, joint, side * 2.9, 9.7, 0, 14));
+      const arm = cylinder(0.5, 0.45, 4, shell, side * 3.1, 7.6, 0, 14);
+      arm.rotation.z = side * 0.12;
+      robot.add(arm);
+      robot.add(box(1.1, 1.1, 1.1, material(PINK, { roughness: 0.4 }), side * 3.35, 5.3, 0));
+    });
+    robot.add(cylinder(0.55, 0.65, 1, joint, 0, 10.9, 0, 14));
+    // Chest status screen (front = -z, toward the players)
+    const chest = liveBoard(256, 160, (ctx, w, h) => {
+      const red = RL.phase === 'red';
+      ctx.fillStyle = '#101418';
+      ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = red ? '#ff3b4e' : RL.phase === 'green' ? '#2fd46b' : '#ffc53d';
+      ctx.font = 'bold 54px Segoe UI, Arial, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('CI', w / 2, 66);
+      ctx.font = 'bold 30px Segoe UI, Arial, sans-serif';
+      ctx.fillText(red ? 'FAILING' : RL.phase === 'green' ? 'PASSING' : 'QUEUED', w / 2, 120);
+    });
+    robot.add(plane(2.8, 1.75, boardMaterial(chest), 0, 8.6, -1.42, Math.PI));
+    // Traffic-light head (turns around: lamps toward the players = BUILD RED)
+    const head = new THREE.Group();
+    head.position.y = 13.9;
+    head.add(box(2.6, 5.4, 2.2, material('#2a2d34', { roughness: 0.45, metalness: 0.4 }), 0, 0, 0));
+    const lampColors = ['#ff3b4e', '#ffc53d', '#2fd46b'];
+    const lamps = lampColors.map((color, index) => {
+      const lampMaterial = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.1, roughness: 0.3 });
+      const lamp = mesh(new THREE.CylinderGeometry(0.8, 0.8, 0.3, 24), lampMaterial, 0, 1.65 - index * 1.65, -1.15);
+      lamp.rotation.x = Math.PI / 2;
+      head.add(lamp);
+      const hood = mesh(new THREE.CylinderGeometry(0.98, 0.98, 0.7, 20, 1, true, -Math.PI / 2, Math.PI), material('#1b1d22', { side: THREE.DoubleSide }), 0, 1.65 - index * 1.65 + 0.15, -1.45);
+      hood.rotation.x = Math.PI / 2;
+      hood.rotation.y = Math.PI / 2;
+      head.add(hood);
+      return lampMaterial;
+    });
+    // Back of the head: pink plate with the three shapes
+    head.add(box(2.2, 4.6, 0.12, material(PINK, { roughness: 0.5 }), 0, 0, 1.12));
+    [0, 1, 2].forEach((kind) => {
+      const shape = mesh(SHAPE_RINGS[kind], new THREE.MeshBasicMaterial({ color: '#ffffff', side: THREE.DoubleSide }), 0, 1.5 - kind * 1.5, 1.2);
+      shape.scale.setScalar(0.55);
+      head.add(shape);
+    });
+    head.add(cylinder(0.06, 0.06, 1.2, joint, 0, 3.3, 0, 8));
+    head.add(sphere(0.32, glow(HOT, 1.6), 0, 4, 0, 12));
+    robot.add(head);
+    group.add(robot);
+    // Status board above the robot (lazy, redrawn only when its text changes)
+    const status = liveBoard(1024, 300, (ctx, w, h) => drawStatus(ctx, w, h));
+    const statusFrame = new THREE.Group();
+    statusFrame.position.set(cx, 0, 52.6);
+    blk(statusFrame, 21, 7, 0.5, material('#1d1d24'), 0, 21.5, 0.2);
+    statusFrame.add(plane(20, 6, boardMaterial(status), 0, 21.5, -0.08, Math.PI));
+    [-9, 9].forEach((x) => blk(statusFrame, 0.6, 18, 0.6, material(TEAL), x, 9, 0.3));
+    group.add(statusFrame);
+    // Start kiosk
+    const kiosk = new THREE.Group();
+    kiosk.position.set(cx, 0, -35);
+    blk(kiosk, 1.4, 1.1, 1.4, material(PASTEL.mint), 0, 0.55, 0);
+    kiosk.add(cylinder(0.45, 0.45, 0.2, glow(HOT, 1.4), 0, 1.2, 0, 24));
+    action(kiosk, 'Red Build, Green Build', 'Press E to start a Red Build, Green Build round', () => startRound(group));
+    group.add(kiosk);
+    const kioskSign = textSprite('E: start a round', { width: 5, background: 'rgba(230, 0, 126, 0.9)' });
+    kioskSign.position.set(cx, 2.6, -35);
+    group.add(kioskSign);
+    // Field drones patrol both sides, always facing the players
+    [[x0 + 3, 0], [x0 + 3, 2], [x1 - 3, 1], [x1 - 3, 0]].forEach(([x, kind], index) => addDrone(kind, (t) => {
+      const z = 6 + Math.sin(t * 0.25 + index * 1.7) * 36;
+      return { x, y: 5 + Math.sin(t * 1.4 + index) * 0.3, z, yaw: yawTo(x, z, cx, z) };
+    }));
+    bake(group, S);
+
+    // ---- Game state ----
+    const RL = { phase: 'green', since: 0, until: 0, round: null, headAngle: Math.PI, lastBoard: 0, limit: 90 };
+    function setPhase(phase, t, duration) {
+      RL.phase = phase;
+      RL.since = t;
+      RL.until = t + duration;
+      lamps.forEach((lampMaterial, index) => { lampMaterial.emissiveIntensity = (phase === 'red' && index === 0) || (phase === 'ready' && index === 1) || (phase === 'green' && index === 2) ? 2.4 : 0.08; });
+      chest.dirty = true;
+      status.dirty = true;
+      if (RL.round) RL.round.snapshot = null;
+    }
+    function drawStatus(ctx, w, h) {
+      const t = RL.now || 0;
+      const red = RL.phase === 'red';
+      const ready = RL.phase === 'ready';
+      ctx.fillStyle = red ? '#3a0710' : ready ? '#3a2a05' : '#06301a';
+      ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = red ? '#ff3b4e' : ready ? '#ffc53d' : '#2fd46b';
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 120px Segoe UI, Arial, sans-serif';
+      ctx.fillText(red ? 'BUILD RED' : ready ? 'GET READY' : 'BUILD GREEN', w / 2, 130);
+      ctx.font = 'bold 40px Segoe UI, Arial, sans-serif';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(red ? 'FREEZE: moving now fails the build' : ready ? 'Round starts in a moment' : 'GO: walk to the finish line', w / 2, 190);
+      // Countdown song bar: "npm run build" fills while the build is green
+      const progress = RL.phase === 'green' ? Math.min(1, (t - RL.since) / Math.max(0.1, RL.until - RL.since)) : red ? 1 : 0;
+      ctx.fillStyle = 'rgba(255,255,255,0.15)';
+      ctx.fillRect(60, 220, w - 120, 46);
+      ctx.fillStyle = red ? '#ff3b4e' : '#2fd46b';
+      ctx.fillRect(60, 220, (w - 120) * progress, 46);
+      const song = 'npm  run  build . . .';
+      ctx.font = 'bold 34px Consolas, monospace';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(song.slice(0, Math.ceil(song.length * progress)), w / 2, 255);
+      if (RL.round) {
+        ctx.textAlign = 'right';
+        ctx.font = 'bold 30px Segoe UI, Arial, sans-serif';
+        ctx.fillText(`${Math.max(0, RL.limit - (t - RL.round.start)).toFixed(0)} s`, w - 30, 40);
+      }
+    }
+    function startRound(anchor) {
+      if (RL.round) return 'A round is already running: reach the finish line!';
+      const t = clock();
+      RL.round = { start: t, snapshot: null };
+      teleport(anchor, cx + (Math.random() - 0.5) * 16, 0.1, FIELD.start - 2.5);
+      setPhase('ready', t, 3);
+      return 'Red Build, Green Build: walk on BUILD GREEN, freeze on BUILD RED. Reach the pink and teal finish line within 90 s.';
+    }
+    function endRound() { RL.round = null; status.dirty = true; }
+    function fail(reason) {
+      endRound();
+      buildFailed(GAMES.rl, reason, group, [cx + (Math.random() - 0.5) * 12, 0.1, -36]);
+    }
+    RL.start = () => startRound(group);
+    RL.setPhase = (phase, duration) => setPhase(phase, clock(), duration); // test hook
+    RL.fail = fail;
+    window.SquidGameEE = window.SquidGameEE || {};
+    window.SquidGameEE.redLight = RL;
+
+    setPhase('green', 0, 4);
+    animate(group, () => {
+      const t = clock();
+      RL.now = t;
+      // Phase machine: ready -> green -> red -> green ... (faster as a round goes on)
+      if (t >= RL.until) {
+        const pace = RL.round ? Math.max(0.6, 1 - (t - RL.round.start) / 120) : 1;
+        if (RL.phase === 'green') setPhase('red', t, 2 + Math.random() * 1.5);
+        else setPhase('green', t, (2.5 + Math.random() * 2.5) * pace);
+      }
+      // Head: lamps face the players on red, the sky wall on green
+      const target = RL.phase === 'red' ? 0 : Math.PI;
+      RL.headAngle += (target - RL.headAngle) * 0.15;
+      head.rotation.y = RL.headAngle;
+      if (RL.phase === 'green' && t - RL.lastBoard > 0.12) { RL.lastBoard = t; status.dirty = true; }
+      chest.refresh();
+      status.refresh();
+      if (!RL.round) return;
+      const local = avatarLocal(group);
+      if (!local) return;
+      if (local.x < x0 - 1 || local.x > x1 + 1 || local.z < z0 - 2 || local.z > z1 + 1 || local.y > 14) {
+        endRound();
+        system('Red Build, Green Build: round cancelled, you left the field.');
+        return;
+      }
+      if (isFlying()) { fail('no flying during a build'); return; }
+      if (t - RL.round.start > RL.limit) { fail(`the build timed out (${RL.limit} s)`); return; }
+      if (RL.phase === 'red' && t - RL.since > 0.45) {
+        if (!RL.round.snapshot) RL.round.snapshot = local.clone();
+        else if (Math.hypot(local.x - RL.round.snapshot.x, local.z - RL.round.snapshot.z) > 0.35 || Math.abs(local.y - RL.round.snapshot.y) > 0.6) { fail('you moved on BUILD RED'); return; }
+      }
+      if (local.z >= FIELD.finish && RL.phase !== 'ready') {
+        endRound();
+        award(GAMES.rl);
+      }
+    });
+  }
+
+  // ==========================================================================
+  // 5) STAIRCASE MAZE + GLASS BRIDGE OF CODE REVIEW
+  // ==========================================================================
+  const BRIDGE = { y: 12, lanes: [-8.75, -11.25], z0: -2.2, step: 2.8, pairs: 9, paneW: 2.1, paneD: 2.0, startZ0: -17.3, startZ1: -3.2, endZ0: 22, endZ1: 28, x0: -20.4, x1: -4 };
+  const TRIVIA = [
+    ['git rebase rewrites commit history', true], ['HTTP 404 means Not Found', true], ['JSON keys must be double-quoted strings', true],
+    ['A Promise is pending, fulfilled or rejected', true], ['typeof null is "object" in JavaScript', true], ['Binary search runs in O(log n)', true],
+    ['git stash shelves uncommitted changes', true], ['UTF-8 is backward compatible with ASCII', true], ['Python lists are mutable', true],
+    ['TCP delivers bytes in order', true], ['A mutex lets one thread in at a time', true], ['CSS flexbox lays out one axis at a time', true],
+    ['HTTP 500 means the client sent a bad request', false], ['0.1 + 0.2 === 0.3 in JavaScript', false], ['Binary search works on unsorted arrays', false],
+    ['HTTPS uses port 80 by default', false], ['In SQL, NULL = NULL is true', false], ['git reset --soft deletes your changes', false],
+    ['The regex dot matches a newline by default', false], ['const makes a JS object immutable', false], ['A Docker container boots its own kernel', false],
+    ['git pull never creates a merge commit', false], ['Arrays in JavaScript have a fixed size', false], ['DNS turns IP addresses into MAC addresses', false]
+  ];
+  function sgBridge(group) {
+    const S = new THREE.Group();
+    const D = new THREE.Group(); // decor that never holds you up
+    const Y = BRIDGE.y;
+    const stepColors = [PASTEL.pink, '#a8e6cf', '#ffe08a'];
+    // ---- Escher-like pastel staircase maze (instanced steps) ----
+    // flight: start point, direction, start height, rise per step (negative goes down)
+    const flights = [
+      { x: -26, z: -36, dx: 1, dz: 0, y: 0, rise: 0.5, color: 0 }, // ground -> L1 (4 m)
+      { x: -17.9, z: -33.5, dx: 0, dz: 1, y: 4, rise: 0.5, color: 1 }, // L1 -> L2 (8 m)
+      { x: -17.9, z: -22.9, dx: 0, dz: 1, y: 8, rise: 0.5, color: 2 }, // L2 -> bridge deck (12 m)
+      { x: -15.4, z: -36, dx: 1, dz: 0, y: 4, rise: 0.5, color: 2 }, // L1 -> dead end (8 m)
+      { x: -20.4, z: -25.4, dx: -1, dz: 0, y: 8, rise: -0.5, color: 0 } // L2 -> dead end down (4 m)
+    ];
+    const RUN = 0.7;
+    const STEPS = 8;
+    const stepMatrices = [];
+    const stepColorsList = [];
+    const dummy = new THREE.Object3D();
+    flights.forEach((flight) => {
+      for (let k = 0; k < STEPS; k++) {
+        const along = (k + 0.5) * RUN;
+        const top = flight.y + (flight.rise > 0 ? (k + 1) * flight.rise : (k + 1) * flight.rise);
+        dummy.position.set(flight.x + flight.dx * along, top - 0.25, flight.z + flight.dz * along);
+        dummy.rotation.set(0, 0, 0);
+        dummy.scale.set(flight.dx ? RUN : 2.6, 0.5, flight.dz ? RUN : 2.6);
+        dummy.updateMatrix();
+        stepMatrices.push(dummy.matrix.clone());
+        stepColorsList.push(stepColors[flight.color]);
+      }
+    });
+    // Decorative Escher flights: upside down under the deck, sideways on a wall
+    const decorMatrices = [];
+    const decorColors = [];
+    const decorFlight = (pivot, rotation, color) => {
+      const outer = new THREE.Matrix4().compose(pivot, new THREE.Quaternion().setFromEuler(rotation), new THREE.Vector3(1, 1, 1));
+      for (let k = 0; k < STEPS; k++) {
+        dummy.position.set((k + 0.5) * RUN, (k + 1) * 0.5 - 0.25, 0);
+        dummy.rotation.set(0, 0, 0);
+        dummy.scale.set(RUN, 0.5, 2.6);
+        dummy.updateMatrix();
+        decorMatrices.push(outer.clone().multiply(dummy.matrix));
+        decorColors.push(stepColors[color]);
+      }
+    };
+    decorFlight(new THREE.Vector3(-17, Y - 0.8, -12), new THREE.Euler(Math.PI, 0, 0), 1);
+    decorFlight(new THREE.Vector3(-23.8, 6, -15.5), new THREE.Euler(0, Math.PI / 2, Math.PI / 2), 2);
+    decorFlight(new THREE.Vector3(-8.5, 14.5, -30), new THREE.Euler(0, -Math.PI / 2, Math.PI), 0);
+    const stepMaterial = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.7 });
+    const makeSteps = (matrices, colors, decorative) => {
+      const instanced = new THREE.InstancedMesh(unitBox, decorative ? new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.7 }) : stepMaterial, matrices.length);
+      const color = new THREE.Color();
+      matrices.forEach((matrix, index) => { instanced.setMatrixAt(index, matrix); instanced.setColorAt(index, color.set(colors[index])); });
+      instanced.frustumCulled = false;
+      instanced.castShadow = true;
+      instanced.receiveShadow = true;
+      if (decorative) noRay(instanced);
+      group.add(instanced);
+    };
+    makeSteps(stepMatrices, stepColorsList, false);
+    makeSteps(decorMatrices, decorColors, true);
+    // Landings with pastel columns and Escher arches
+    const landing = (x, z, w, d, top, color) => {
+      blk(S, w, 0.5, d, material(color, { roughness: 0.7 }), x, top - 0.25, z);
+      [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([sx, sz]) => blk(S, 0.7, top - 0.5, 0.7, material(PASTEL.cream), x + sx * (w / 2 - 0.5), (top - 0.5) / 2, z + sz * (d / 2 - 0.5)));
+    };
+    landing(-17.9, -36, 5, 5, 4, PASTEL.lilac);
+    landing(-17.9, -25.4, 5, 5, 8, PASTEL.mint);
+    landing(-7.8, -36, 4, 5, 8, PASTEL.yellow); // dead end
+    landing(-27.8, -25.4, 3.6, 5, 4, PASTEL.pink); // dead end
+    const deadEnd = (x, y, z, text) => {
+      const sign = textSprite(text, { width: 5, background: 'rgba(230, 0, 126, 0.9)' });
+      sign.position.set(x, y + 2.4, z);
+      group.add(sign);
+    };
+    deadEnd(-7.8, 8, -36, '404: stairway not found');
+    deadEnd(-27.8, 4, -25.4, 'Infinite loop: go back');
+    const archMaterial = material(PASTEL.lilac, { roughness: 0.7 });
+    [[-17.9, 4, -37.8], [-17.9, 8, -27.2]].forEach(([x, y, z]) => {
+      blk(S, 0.5, 3.2, 0.5, archMaterial, x - 2, y + 1.6, z);
+      blk(S, 0.5, 3.2, 0.5, archMaterial, x + 2, y + 1.6, z);
+      blk(S, 4.5, 0.5, 0.5, archMaterial, x, y + 3.45, z);
+    });
+
+    // ---- Start deck, end deck, rails ----
+    const deck = material(PASTEL.mint, { roughness: 0.7 });
+    const rail = material(TEAL, { roughness: 0.5, metalness: 0.2 });
+    const deckZ = (BRIDGE.startZ0 + BRIDGE.startZ1) / 2;
+    const deckDepth = BRIDGE.startZ1 - BRIDGE.startZ0;
+    const deckW = BRIDGE.x1 - BRIDGE.x0;
+    const deckX = (BRIDGE.x0 + BRIDGE.x1) / 2;
+    blk(S, deckW, 0.6, deckDepth, deck, deckX, Y - 0.3, deckZ);
+    blk(S, 12, 0.6, BRIDGE.endZ1 - BRIDGE.endZ0, deck, -10, Y - 0.3, (BRIDGE.endZ0 + BRIDGE.endZ1) / 2);
+    [[BRIDGE.x0 + 0.5, BRIDGE.startZ0 + 0.5], [BRIDGE.x1 - 0.5, BRIDGE.startZ0 + 0.5], [BRIDGE.x0 + 0.5, BRIDGE.startZ1 - 0.5], [BRIDGE.x1 - 0.5, BRIDGE.startZ1 - 0.5], [-15.5, BRIDGE.endZ0 + 0.5], [-4.5, BRIDGE.endZ0 + 0.5], [-15.5, BRIDGE.endZ1 - 0.5], [-4.5, BRIDGE.endZ1 - 0.5]].forEach(([x, z]) => blk(S, 1, Y - 0.6, 1, material(PASTEL.yellow), x, (Y - 0.6) / 2, z));
+    // Deck railings (gaps: stairs arrive at the north-west, the bridge leaves south)
+    const railH = 1.1;
+    blk(S, 12.4, railH, 0.2, rail, -10.2, Y + railH / 2, BRIDGE.startZ0 + 0.1);
+    blk(S, 0.2, railH, deckDepth, rail, BRIDGE.x1 - 0.1, Y + railH / 2, deckZ);
+    blk(S, 0.2, railH, deckDepth, rail, BRIDGE.x0 + 0.1, Y + railH / 2, deckZ);
+    [[BRIDGE.x0, -12.5], [-7.5, BRIDGE.x1]].forEach(([a, b]) => blk(S, b - a, railH, 0.2, rail, (a + b) / 2, Y + railH / 2, BRIDGE.startZ1 - 0.1));
+    blk(S, 12, railH, 0.2, rail, -10, Y + railH / 2, BRIDGE.endZ1 - 0.1);
+    [-16, -4].forEach((x) => blk(S, 0.2, railH, BRIDGE.endZ1 - BRIDGE.endZ0, rail, x + (x < 0 && x === -16 ? 0.1 : -0.1), Y + railH / 2, (BRIDGE.endZ0 + BRIDGE.endZ1) / 2));
+    [[-16, -12.5], [-7.5, -4]].forEach(([a, b]) => blk(S, b - a, railH, 0.2, rail, (a + b) / 2, Y + railH / 2, BRIDGE.endZ0 + 0.1));
+    // Bridge frame: side rails (you cannot slip off the sides) and steel beams
+    const bridgeLength = BRIDGE.endZ0 - BRIDGE.startZ1;
+    const bridgeMid = (BRIDGE.endZ0 + BRIDGE.startZ1) / 2;
+    [-12.45, -7.55].forEach((x) => {
+      blk(S, 0.16, railH, bridgeLength, rail, x, Y + railH / 2, bridgeMid);
+      blk(S, 0.4, 0.5, bridgeLength, material('#3a3f4a', { metalness: 0.6, roughness: 0.4 }), x, Y - 0.35, bridgeMid);
+    });
+    for (let i = 0; i <= BRIDGE.pairs; i++) {
+      const z = BRIDGE.z0 - 1.4 + i * BRIDGE.step;
+      const crossbeam = blk(D, 4.9, 0.18, 0.18, material('#3a3f4a', { metalness: 0.6, roughness: 0.4 }), -10, Y - 0.5, z);
+      crossbeam.raycast = () => {};
+    }
+    // Lane markers on the start deck: LEFT (east lane) and RIGHT (west lane), seen walking south
+    group.add(floorDecal(2, 1, new THREE.MeshBasicMaterial({ map: labelTexture('LEFT', { bg: PINK, fg: '#ffffff', width: 256, height: 128 }), toneMapped: false }), BRIDGE.lanes[0], Y + 0.02, BRIDGE.startZ1 - 1.2));
+    group.add(floorDecal(2, 1, new THREE.MeshBasicMaterial({ map: labelTexture('RIGHT', { bg: TEAL, fg: '#ffffff', width: 256, height: 128 }), toneMapped: false }), BRIDGE.lanes[1], Y + 0.02, BRIDGE.startZ1 - 1.2));
+    group.children[group.children.length - 1].rotation.z = Math.PI;
+    group.children[group.children.length - 2].rotation.z = Math.PI;
+    // Pit under the bridge (fenced at ground level)
+    const pitFloor = floorDecal(12, bridgeLength, new THREE.MeshBasicMaterial({ map: lazyTexture(256, 512, (ctx, w, h) => {
+      ctx.fillStyle = '#2a0f22';
+      ctx.fillRect(0, 0, w, h);
+      ctx.strokeStyle = 'rgba(255, 46, 136, 0.45)';
+      ctx.lineWidth = 3;
+      for (let i = 0; i < 8; i++) { ctx.beginPath(); ctx.moveTo(0, i * 64); ctx.lineTo(w, i * 64); ctx.stroke(); }
+      for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.moveTo(i * 64, 0); ctx.lineTo(i * 64, h); ctx.stroke(); }
+      ctx.fillStyle = 'rgba(255, 46, 136, 0.7)';
+      ctx.font = 'bold 40px Consolas, monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('REJECTED', w / 2, h / 2);
+    }), toneMapped: false }), -10, 0.03, bridgeMid);
+    group.add(pitFloor);
+    const fence = material(PINK, { roughness: 0.5 });
+    blk(S, 0.3, 1.2, bridgeLength, fence, -16.2, 0.6, bridgeMid);
+    blk(S, 0.3, 1.2, bridgeLength, fence, -3.8, 0.6, bridgeMid);
+    blk(S, 12.7, 1.2, 0.3, fence, -10, 0.6, BRIDGE.startZ1 - 0.15);
+    blk(S, 12.7, 1.2, 0.3, fence, -10, 0.6, BRIDGE.endZ0 + 0.15);
+
+    // ---- Glass panes (one mesh each so a broken one can disappear) ----
+    const glassMaterial = new THREE.MeshStandardMaterial({ color: '#cdeeff', transparent: true, opacity: 0.4, roughness: 0.05, metalness: 0.1, depthWrite: false });
+    const edgeMaterial = material('#e8f6ff', { roughness: 0.2, metalness: 0.5 });
+    const panes = [];
+    for (let i = 0; i < BRIDGE.pairs; i++) {
+      panes.push(BRIDGE.lanes.map((x) => {
+        const z = BRIDGE.z0 + i * BRIDGE.step;
+        const pane = new THREE.Mesh(new THREE.BoxGeometry(BRIDGE.paneW, 0.12, BRIDGE.paneD), glassMaterial);
+        pane.position.set(x, Y - 0.06, z);
+        pane.renderOrder = 2;
+        group.add(pane);
+        // Thin edge strips (decor, do not hold you up)
+        [-1, 1].forEach((side) => { const edge = blk(D, BRIDGE.paneW, 0.05, 0.08, edgeMaterial, x, Y - 0.1, z + side * (BRIDGE.paneD / 2 - 0.04)); edge.raycast = () => {}; });
+        return pane;
+      }));
+    }
+    // Number tags along the rail
+    for (let i = 0; i < BRIDGE.pairs; i++) {
+      const tag = textSprite(`#${i + 1}`, { width: 1.6, background: 'rgba(230, 0, 126, 0.9)' });
+      tag.position.set(-13.1, Y + 1.7, BRIDGE.z0 + i * BRIDGE.step);
+      group.add(tag);
+    }
+    // Shards: one instanced burst reused for every break
+    const shardGeometry = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0.35, 0, 0.05, 0.1, 0, 0.3], 3));
+    shardGeometry.computeVertexNormals();
+    const shards = new THREE.InstancedMesh(shardGeometry, new THREE.MeshBasicMaterial({ color: '#dff4ff', transparent: true, opacity: 0.7, side: THREE.DoubleSide, depthWrite: false }), 40);
+    shards.count = 0;
+    shards.frustumCulled = false;
+    noRay(shards);
+    group.add(shards);
+    const shardState = { start: -10, x: 0, z: 0, seeds: Array.from({ length: 40 }, () => [Math.random() - 0.5, Math.random() - 0.5, Math.random(), Math.random() * 6]) };
+
+    // ---- Code review board on the end deck (facing the players) ----
+    const reviewBoard = liveBoard(1024, 700, (ctx, w, h) => {
+      ctx.fillStyle = '#fff7fb';
+      ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = PINK;
+      ctx.fillRect(0, 0, w, 96);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 50px Segoe UI, Arial, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('CODE REVIEW: TRUE = LEFT  |  FALSE = RIGHT', w / 2, 66);
+      ctx.textAlign = 'left';
+      ctx.font = '34px Segoe UI, Arial, sans-serif';
+      BR.statements.forEach((statement, index) => {
+        ctx.fillStyle = index % 2 ? '#14a39a' : '#5b2a4a';
+        ctx.fillText(`#${index + 1}  ${statement}`, 36, 150 + index * 60, w - 60);
+      });
+      ctx.fillStyle = '#888';
+      ctx.font = 'italic 26px Segoe UI, Arial, sans-serif';
+      ctx.fillText(BR.run ? 'Crossing in progress. One wrong pane = BUILD FAILED.' : 'E at the console on the start deck to shuffle the glass and start.', 36, h - 22);
+    });
+    const boardGroup = new THREE.Group();
+    boardGroup.position.set(-10, Y, BRIDGE.endZ1 - 0.6);
+    blk(boardGroup, 10.4, 7.2, 0.3, material('#1d1d24'), 0, 4.8, 0.1);
+    boardGroup.add(plane(10, 6.8, boardMaterial(reviewBoard), 0, 4.8, -0.08, Math.PI));
+    group.add(boardGroup);
+
+    // ---- Console (start a crossing) and lifts ----
+    const consoleGroup = new THREE.Group();
+    consoleGroup.position.set(-6, Y, -12);
+    blk(consoleGroup, 1.4, 1.1, 1, material(PASTEL.lilac), 0, 0.55, 0);
+    consoleGroup.add(cylinder(0.4, 0.4, 0.15, glow(HOT, 1.5), 0, 1.15, 0, 20));
+    action(consoleGroup, 'Glass Bridge console', 'Press E to start a crossing (shuffles the glass)', () => newCrossing(true));
+    group.add(consoleGroup);
+    const consoleSign = textSprite('E: start a crossing', { width: 5, background: 'rgba(230, 0, 126, 0.9)' });
+    consoleSign.position.set(-6, Y + 2.6, -12);
+    group.add(consoleSign);
+    const lift = (x, y, z, label, prompt, to, message) => {
+      const pad = new THREE.Group();
+      pad.position.set(x, y, z);
+      pad.add(cylinder(1.1, 1.1, 0.12, glow(TEAL, 1.2), 0, 0.06, 0, 24));
+      blk(pad, 0.4, 1.3, 0.4, material(PASTEL.pink), 1.3, 0.65, 0);
+      action(pad, label, prompt, () => { teleport(group, to[0], to[1], to[2]); return message; });
+      group.add(pad);
+      const sign = textSprite(label, { width: 4, background: 'rgba(20, 163, 154, 0.9)' });
+      sign.position.set(x, y + 2.4, z);
+      group.add(sign);
+    };
+    lift(-12, 0, -10, 'Lift up to the bridge', 'Press E to ride the lift up to the bridge deck', [-12, Y + 0.1, -9], 'Lift: bridge deck. E at the console starts a crossing.');
+    lift(-14, Y, 25.5, 'Lift down', 'Press E to ride the lift down', [-10, 0.1, 25], 'Lift: ground level.');
+    // Bridge drones fly along both sides
+    [[-14.5, 1], [-5.5, 2]].forEach(([x, kind], index) => addDrone(kind, (t) => {
+      const z = 9 + Math.sin(t * 0.35 + index * 3) * 11;
+      return { x, y: Y + 2.4 + Math.sin(t * 1.8 + index) * 0.3, z, yaw: yawTo(x, z, -10, z) };
+    }));
+    bake(group, S);
+    noRay(bake(group, D));
+
+    // ---- Game state ----
+    const BR = { safe: [], statements: [], run: false, broken: [], restoreAt: 0, panes };
+    function newCrossing(start) {
+      BR.safe = Array.from({ length: BRIDGE.pairs }, () => (Math.random() < 0.5 ? 0 : 1));
+      const trues = TRIVIA.filter(([, truth]) => truth).sort(() => Math.random() - 0.5);
+      const falses = TRIVIA.filter(([, truth]) => !truth).sort(() => Math.random() - 0.5);
+      BR.statements = BR.safe.map((lane) => (lane === 0 ? trues.pop() : falses.pop())[0]);
+      panes.forEach((pair) => pair.forEach((pane) => { pane.visible = true; }));
+      BR.broken = [];
+      BR.run = !!start;
+      reviewBoard.dirty = true;
+      return start ? 'Glass Bridge of Code Review: the glass is shuffled. Read the review board at the far end: TRUE = step on the LEFT pane, FALSE = the RIGHT pane.' : null;
+    }
+    function breakPane(i, lane) {
+      const pane = panes[i][lane];
+      pane.visible = false;
+      BR.broken.push(pane);
+      BR.restoreAt = clock() + 30;
+      shardState.start = clock();
+      shardState.x = pane.position.x;
+      shardState.z = pane.position.z;
+      play('click');
+    }
+    BR.newCrossing = newCrossing;
+    window.SquidGameEE = window.SquidGameEE || {};
+    window.SquidGameEE.bridge = BR;
+    newCrossing(false);
+
+    animate(group, () => {
+      const t = clock();
+      BR.now = t;
+      reviewBoard.refresh();
+      // Shards fall for 1.5 s after a break
+      const age = t - shardState.start;
+      if (age < 1.5) {
+        shards.count = 40;
+        shardState.seeds.forEach(([sx, sz, speed, spin], index) => {
+          dummy.position.set(shardState.x + sx * (1.6 + age * 2), Y - 0.1 - age * age * 9 * (0.6 + speed * 0.6), shardState.z + sz * (1.6 + age * 2));
+          dummy.rotation.set(spin + age * 6, spin * 2 + age * 4, age * 3);
+          dummy.scale.setScalar(1);
+          dummy.updateMatrix();
+          shards.setMatrixAt(index, dummy.matrix);
+        });
+        shards.instanceMatrix.needsUpdate = true;
+      } else if (shards.count) shards.count = 0;
+      if (!BR.run && BR.broken.length && t > BR.restoreAt) { BR.broken.forEach((pane) => { pane.visible = true; }); BR.broken = []; }
+      const local = avatarLocal(group);
+      if (!local) return;
+      const overBridge = local.x > -12.6 && local.x < -7.4 && local.z > BRIDGE.startZ1 && local.z < BRIDGE.endZ0;
+      // Standing on a fragile pane breaks it
+      if (overBridge && local.y > Y - 0.5 && local.y < Y + 1.2) {
+        for (let i = 0; i < BRIDGE.pairs; i++) {
+          const z = BRIDGE.z0 + i * BRIDGE.step;
+          if (Math.abs(local.z - z) > BRIDGE.paneD / 2) continue;
+          BRIDGE.lanes.forEach((x, lane) => {
+            if (lane !== BR.safe[i] && panes[i][lane].visible && Math.abs(local.x - x) < BRIDGE.paneW / 2) breakPane(i, lane);
+          });
+        }
+      }
+      // Falling into the pit: build failed, back on the start deck
+      if (local.x > -16.5 && local.x < -3.5 && local.z > BRIDGE.startZ1 - 0.5 && local.z < BRIDGE.endZ0 + 0.5 && local.y < Y - 4 && local.y > -5) {
+        const wasRun = BR.run;
+        BR.run = false;
+        reviewBoard.dirty = true;
+        buildFailed(GAMES.bridge, 'that pane did not pass code review', group, [-10, Y + 0.1, -7]);
+        if (wasRun) system('E at the console starts a new crossing.');
+        return;
+      }
+      if (BR.run && local.z > BRIDGE.endZ0 + 0.3 && local.y > Y - 0.6 && local.y < Y + 3 && local.x > -16 && local.x < -4) {
+        BR.run = false;
+        reviewBoard.dirty = true;
+        if (isFlying()) system('Glass Bridge: flying over the panes does not count. Start a new crossing and walk it.');
+        else award(GAMES.bridge);
+      }
+    });
+  }
+
+  // ==========================================================================
+  // 6) DORMITORY: stacked bunks, the MVC piggy bank, the wins board
+  // ==========================================================================
+  const DORM = { x0: 16, x1: 68, z0: -38, z1: 4, h: 16 };
+  function sgDorm(group) {
+    const S = new THREE.Group();
+    const { x0, x1, z0, z1, h } = DORM;
+    const cx = (x0 + x1) / 2;
+    const cz = (z0 + z1) / 2;
+    const outside = material(PASTEL.mint, { roughness: 0.85 });
+    const inside = material('#d6ece3', { roughness: 0.9 });
+    // Walls (door on the west side), roof, floor
+    blk(S, x1 - x0, h, 0.6, outside, cx, h / 2, z0);
+    blk(S, x1 - x0, h, 0.6, outside, cx, h / 2, z1);
+    blk(S, 0.6, h, z1 - z0, outside, x1, h / 2, cz);
+    const doorZ0 = -20;
+    const doorZ1 = -13;
+    blk(S, 0.6, h, doorZ0 - z0, outside, x0, h / 2, (z0 + doorZ0) / 2);
+    blk(S, 0.6, h, z1 - doorZ1, outside, x0, h / 2, (doorZ1 + z1) / 2);
+    blk(S, 0.6, h - 6, doorZ1 - doorZ0, outside, x0, 6 + (h - 6) / 2, (doorZ0 + doorZ1) / 2);
+    blk(S, x1 - x0 + 0.6, 0.6, z1 - z0 + 0.6, material('#9fc9bb'), cx, h + 0.3, cz);
+    blk(S, x1 - x0 - 0.6, 0.06, z1 - z0 - 0.6, material('#c9d6d0', { roughness: 0.5 }), cx, 0.03, cz);
+    // Inner lining (lighter) so the interior reads as a hall
+    blk(S, x1 - x0 - 0.8, h - 0.4, 0.05, inside, cx, h / 2, z0 + 0.33);
+    blk(S, x1 - x0 - 0.8, h - 0.4, 0.05, inside, cx, h / 2, z1 - 0.33);
+    blk(S, 0.05, h - 0.4, z1 - z0 - 0.8, inside, x1 - 0.33, h / 2, cz);
+    // Ceiling light strips
+    for (let i = 0; i < 4; i++) {
+      const strip = blk(S, x1 - x0 - 8, 0.15, 0.5, glow('#fff6e8', 1.4), cx, h - 0.2, z0 + 6 + i * 10);
+      strip.castShadow = false;
+    }
+    // Door frame and sign
+    blk(S, 0.9, 6.4, 0.6, material(PINK), x0 - 0.1, 3.2, doorZ0 - 0.3);
+    blk(S, 0.9, 6.4, 0.6, material(PINK), x0 - 0.1, 3.2, doorZ1 + 0.3);
+    blk(S, 0.9, 0.6, doorZ1 - doorZ0 + 1.2, material(PINK), x0 - 0.1, 6.3, (doorZ0 + doorZ1) / 2);
+    group.add(signPlane(10, 2.2, { bg: '#ffffff', fg: PINK, title: 'DORMITORY', sub: 'bunks, piggy bank, wins board', border: TEAL }, x0 - 0.36, 9, (doorZ0 + doorZ1) / 2, -Math.PI / 2));
+    for (let z = z0 + 5; z < z1; z += 9) {
+      [x0 - 0.35, x1 + 0.35].forEach((x, side) => { if (Math.abs(z - (doorZ0 + doorZ1) / 2) > 6 || side) stencil(Math.round(z) % 3 < 0 ? 0 : (Math.abs(Math.round(z)) % 3), x, 11, z, side ? Math.PI / 2 : -Math.PI / 2, 1.4, side ? TEAL : PINK); });
+    }
+    for (let x = x0 + 6; x < x1; x += 9) stencil(Math.abs(Math.round(x)) % 3, x, 11, z0 - 0.35, Math.PI, 1.4, PINK);
+    // Inside: shapes high on the walls
+    for (let x = x0 + 5; x < x1 - 2; x += 8) stencil(Math.abs(Math.round(x / 8)) % 3, x, 12.5, z0 + 0.4, 0, 1, PINK);
+
+    // ---- Stacked bunks (instanced: frames, bases, mattresses, blankets) ----
+    const tiers = [0.55, 2.15, 3.75, 5.35, 6.95];
+    const columns = [];
+    for (let x = x0 + 2.5; x <= x1 - 2.5; x += 1.55) columns.push(x);
+    const rows = [{ z: z0 + 1.6, dir: 1 }, { z: z1 - 1.6, dir: -1 }];
+    const posts = [];
+    const bases = [];
+    const mattresses = [];
+    const blankets = [];
+    const blanketColors = [];
+    const dummy = new THREE.Object3D();
+    const push = (list, x, y, z, sx, sy, sz) => { dummy.position.set(x, y, z); dummy.rotation.set(0, 0, 0); dummy.scale.set(sx, sy, sz); dummy.updateMatrix(); list.push(dummy.matrix.clone()); };
+    rows.forEach(({ z }) => {
+      columns.forEach((x, column) => {
+        [-1, 1].forEach((sx) => [-1, 1].forEach((sz) => push(posts, x + sx * 0.62, 4, z + sz * 1.1, 0.09, 8, 0.09)));
+        tiers.forEach((y, tier) => {
+          push(bases, x, y, z, 1.3, 0.08, 2.3);
+          push(mattresses, x, y + 0.14, z, 1.2, 0.2, 2.15);
+          push(blankets, x, y + 0.26, z + 0.25, 1.24, 0.06, 1.5);
+          blanketColors.push((column + tier) % 5 === 0 ? PASTEL.pink : (column + tier) % 2 ? TEAL : '#4fb3a9');
+        });
+      });
+    });
+    const instanced = (list, instancedMaterial, colors) => {
+      const result = new THREE.InstancedMesh(unitBox, instancedMaterial, list.length);
+      list.forEach((matrix, index) => result.setMatrixAt(index, matrix));
+      if (colors) { const color = new THREE.Color(); colors.forEach((value, index) => result.setColorAt(index, color.set(value))); }
+      result.frustumCulled = false;
+      result.receiveShadow = true;
+      group.add(result);
+      return result;
+    };
+    instanced(posts, new THREE.MeshStandardMaterial({ color: '#2f6f6a', roughness: 0.4, metalness: 0.5 }));
+    instanced(bases, new THREE.MeshStandardMaterial({ color: '#8fa3a0', roughness: 0.5, metalness: 0.4 }));
+    instanced(mattresses, new THREE.MeshStandardMaterial({ color: '#f4f4ef', roughness: 0.95 }));
+    instanced(blankets, new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.95 }), blanketColors);
+    // Bottom bunks you can sleep on (bed interaction) or sit on
+    rows.forEach(({ z, dir }) => {
+      columns.forEach((x, column) => {
+        if (column % 3) return;
+        const spot = new THREE.Object3D();
+        spot.position.set(x, tiers[0] + 0.25, z + dir * 0.2);
+        group.add(column % 2 ? interactive(spot, 'sit', 'Dorm bunk') : interactive(spot, 'bed', 'Dorm bunk'));
+      });
+    });
+
+    // ---- Giant transparent piggy bank hanging from the ceiling ----
+    const pig = new THREE.Group();
+    pig.position.set(cx, 9.6, cz);
+    const glass = new THREE.MeshStandardMaterial({ color: '#ffc4dc', transparent: true, opacity: 0.26, roughness: 0.05, metalness: 0.1, depthWrite: false, side: THREE.DoubleSide });
+    const body = mesh(new THREE.SphereGeometry(3.2, 32, 20), glass);
+    body.scale.set(1.35, 1, 1);
+    body.renderOrder = 3;
+    pig.add(body);
+    const snout = mesh(new THREE.CylinderGeometry(1.1, 1.2, 1, 24), glass, -4.6, -0.1, 0);
+    snout.rotation.z = Math.PI / 2;
+    pig.add(snout);
+    [-0.4, 0.4].forEach((z) => pig.add(sphere(0.18, material('#b0476f'), -5.12, -0.1, z, 10)));
+    [-1, 1].forEach((side) => {
+      const ear = mesh(new THREE.ConeGeometry(0.9, 1.4, 4), glass, -2.4, 2.9, side * 1.4);
+      ear.rotation.x = side * 0.3;
+      pig.add(ear);
+      [-1, 1].forEach((front) => pig.add(mesh(new THREE.CylinderGeometry(0.6, 0.55, 1.6, 16), glass, front * 2.4, -3.2, side * 1.5)));
+    });
+    const tail = mesh(new THREE.TorusGeometry(0.4, 0.12, 8, 16, Math.PI * 1.5), glass, 4.5, 0.6, 0);
+    tail.rotation.y = Math.PI / 2;
+    pig.add(tail);
+    pig.add(box(1.6, 0.1, 0.3, material('#5b2a4a'), 0.2, 3.2, 0));
+    [[-2.5, -1.2], [-2.5, 1.2], [2.5, -1.2], [2.5, 1.2]].forEach(([x, z]) => pig.add(cylinder(0.04, 0.04, h - 9.6 - 2.2, material('#c7ccd1', { metalness: 0.8 }), x, 2.2 + (h - 9.6 - 2.2) / 2, z, 6)));
+    noRay(pig);
+    group.add(pig);
+    // MVC coins inside: instanced, filled bottom-up as the bank grows
+    const coinCapacity = 420;
+    const coinGeometry = new THREE.CylinderGeometry(0.34, 0.34, 0.08, 16);
+    const coins = new THREE.InstancedMesh(coinGeometry, new THREE.MeshStandardMaterial({ color: '#f2b705', emissive: '#7a4b00', emissiveIntensity: 0.35, metalness: 0.8, roughness: 0.3 }), coinCapacity);
+    const random = seeded(2468);
+    const coinSpots = [];
+    while (coinSpots.length < coinCapacity) {
+      const px = (random() - 0.5) * 7.6;
+      const py = -3 + random() * 5.4;
+      const pz = (random() - 0.5) * 5.6;
+      if ((px / 3.95) ** 2 + (py / 2.95) ** 2 + (pz / 2.95) ** 2 < 1) coinSpots.push([px, py, pz, random() * 6, random() * 6]);
+    }
+    coinSpots.sort((a, b) => a[1] - b[1]);
+    coinSpots.forEach(([px, py, pz, rx, rz], index) => {
+      dummy.position.set(cx + px, 9.6 + py, cz + pz);
+      dummy.rotation.set(rx, 0, rz);
+      dummy.scale.setScalar(1);
+      dummy.updateMatrix();
+      coins.setMatrixAt(index, dummy.matrix);
+    });
+    coins.frustumCulled = false;
+    noRay(coins);
+    group.add(coins);
+    // Live counter under the bank and the session wins board on the east wall
+    const counter = liveBoard(1024, 420, (ctx, w, ch) => {
+      ctx.fillStyle = '#16161c';
+      ctx.fillRect(0, 0, w, ch);
+      ctx.strokeStyle = PINK;
+      ctx.lineWidth = 14;
+      ctx.strokeRect(7, 7, w - 14, ch - 14);
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 54px Segoe UI, Arial, sans-serif';
+      ctx.fillText('MVC IN THE PIGGY BANK', w / 2, 90);
+      ctx.fillStyle = '#ffd43b';
+      ctx.font = 'bold 170px Consolas, monospace';
+      ctx.fillText(String(bankMVC()).padStart(6, '0'), w / 2, 270);
+      ctx.fillStyle = '#c9d6f2';
+      ctx.font = '34px Segoe UI, Arial, sans-serif';
+      ctx.fillText(`Every win adds ${REWARD_MVC} MVC  |  in-game coins only`, w / 2, 360);
+    });
+    const counterGroup = new THREE.Group();
+    counterGroup.position.set(cx, 0, cz);
+    blk(counterGroup, 1.2, 2, 1.2, material(PINK, { roughness: 0.5 }), 0, 1, 0);
+    blk(counterGroup, 7.4, 3.2, 0.3, material('#1d1d24'), 0, 3.6, 0);
+    counterGroup.add(plane(7, 2.9, boardMaterial(counter), 0, 3.6, -0.16, Math.PI));
+    counterGroup.add(plane(7, 2.9, boardMaterial(counter), 0, 3.6, 0.16, 0));
+    group.add(counterGroup);
+    const leaders = liveBoard(1024, 720, (ctx, w, bh) => {
+      ctx.fillStyle = '#fff7fb';
+      ctx.fillRect(0, 0, w, bh);
+      ctx.fillStyle = TEAL;
+      ctx.fillRect(0, 0, w, 110);
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 60px Segoe UI, Arial, sans-serif';
+      ctx.fillText('WINS THIS SESSION', w / 2, 78);
+      const list = [...SG.sessionWins.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
+      ctx.textAlign = 'left';
+      ctx.font = 'bold 44px Segoe UI, Arial, sans-serif';
+      if (!list.length) { ctx.fillStyle = '#888'; ctx.fillText('No passed builds yet. Be the first!', 60, 200); }
+      list.forEach(([tag, wins], index) => {
+        ctx.fillStyle = index === 0 ? PINK : '#3a2a3a';
+        ctx.fillText(`${index + 1}. ${tag}`, 60, 180 + index * 62, 700);
+        ctx.textAlign = 'right';
+        ctx.fillText(String(wins), w - 60, 180 + index * 62);
+        ctx.textAlign = 'left';
+      });
+      const mine = Object.entries(SG.myGames).map(([game, wins]) => `${game} x${wins}`).join('  |  ');
+      ctx.fillStyle = '#14a39a';
+      ctx.font = '26px Segoe UI, Arial, sans-serif';
+      ctx.fillText(mine ? `You: ${mine}` : 'You: no wins yet this session', 40, bh - 30, w - 80);
+    });
+    const leadersGroup = new THREE.Group();
+    leadersGroup.position.set(x1 - 0.7, 0, cz);
+    blk(leadersGroup, 0.3, 7.4, 10.4, material('#1d1d24'), 0, 6.2, 0);
+    leadersGroup.add(plane(10, 7, boardMaterial(leaders), -0.16, 6.2, 0, -Math.PI / 2));
+    group.add(leadersGroup);
+    // Dorm drones circle the piggy bank
+    [0, 1, 2].forEach((kind) => addDrone(kind, (t) => {
+      const angle = t * 0.3 + (kind * Math.PI * 2) / 3;
+      const x = cx + Math.cos(angle) * 9;
+      const z = cz + Math.sin(angle) * 9;
+      return { x, y: 6.5 + Math.sin(t + kind) * 0.4, z, yaw: yawTo(x, z, cx, cz) };
+    }));
+    bake(group, S);
+
+    window.SquidGameEE = window.SquidGameEE || {};
+    window.SquidGameEE.dorm = { coins, counter, leaders };
+    let shownBank = -1;
+    animate(group, (t) => {
+      if (SG.dirty.piggy) { SG.dirty.piggy = false; counter.dirty = true; }
+      if (SG.dirty.leaders) { SG.dirty.leaders = false; leaders.dirty = true; }
+      const bank = bankMVC();
+      if (bank !== shownBank) {
+        shownBank = bank;
+        coins.count = Math.min(coinCapacity, 30 + bank * 2);
+        coins.instanceMatrix.needsUpdate = true;
+      }
+      pig.rotation.y = Math.sin(t * 0.25) * 0.08;
+      counter.refresh();
+      leaders.refresh();
+    });
+  }
+
+  // ==========================================================================
+  // Mini-game overlay (one shared window, created the first time it opens)
+  // ==========================================================================
+  const Overlay = (() => {
+    let root = null;
+    let ui = null;
+    let game = null;
+    let frame = 0;
+    const CSS = `
+      .sgee-overlay { position: fixed; inset: 0; z-index: 70; display: none; align-items: center; justify-content: center; background: rgba(12, 8, 20, 0.55); font-family: Segoe UI, Arial, sans-serif; }
+      .sgee-window { width: min(680px, calc(100vw - 32px)); background: #fff7fb; border: 4px solid ${PINK}; border-radius: 16px; box-shadow: 0 18px 60px rgba(0,0,0,0.45); overflow: hidden; }
+      .sgee-bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: ${PINK}; color: #fff; }
+      .sgee-bar b { flex: 1; font-size: 18px; letter-spacing: 0.5px; }
+      .sgee-shapes { display: flex; gap: 6px; }
+      .sgee-shapes i { width: 14px; height: 14px; border: 3px solid #fff; display: inline-block; }
+      .sgee-shapes i:nth-child(1) { border-radius: 50%; }
+      .sgee-shapes i:nth-child(2) { width: 0; height: 0; border: 0; border-left: 9px solid transparent; border-right: 9px solid transparent; border-bottom: 16px solid #fff; }
+      .sgee-close { background: transparent; border: 0; color: #fff; font-size: 26px; cursor: pointer; line-height: 1; }
+      .sgee-body { padding: 12px 14px 14px; color: #3a2a3a; }
+      .sgee-text { margin: 0 0 8px; font-size: 14px; min-height: 18px; }
+      .sgee-canvas { width: 100%; display: block; border-radius: 10px; background: #f3e6d8; touch-action: none; }
+      .sgee-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+      .sgee-buttons button { flex: 1; min-width: 90px; padding: 9px 10px; border-radius: 10px; border: 2px solid ${TEAL}; background: #fff; color: ${TEAL}; font-weight: 700; cursor: pointer; }
+      .sgee-buttons button.on, .sgee-buttons button:hover { background: ${TEAL}; color: #fff; }
+      .sgee-buttons button:disabled { opacity: 0.4; cursor: default; }
+    `;
+    function ensure() {
+      if (root) return;
+      const style = document.createElement('style');
+      style.textContent = CSS;
+      document.head.appendChild(style);
+      root = document.createElement('div');
+      root.className = 'sgee-overlay';
+      root.innerHTML = '<div class="sgee-window" role="dialog" aria-modal="true"><div class="sgee-bar"><span class="sgee-shapes"><i></i><i></i><i></i></span><b class="sgee-title"></b><button class="sgee-close" type="button" title="Close (Esc)">&times;</button></div>' +
+        '<div class="sgee-body"><p class="sgee-text"></p><canvas class="sgee-canvas" width="640" height="380"></canvas><div class="sgee-buttons"></div></div></div>';
+      document.body.appendChild(root);
+      ui = { title: root.querySelector('.sgee-title'), text: root.querySelector('.sgee-text'), canvas: root.querySelector('.sgee-canvas'), buttons: root.querySelector('.sgee-buttons') };
+      root.querySelector('.sgee-close').addEventListener('click', () => close());
+      // Clicks and drags inside the window never reach the 3D view
+      ['pointerdown', 'mousedown', 'click', 'wheel', 'pointerup', 'pointermove'].forEach((name) => root.addEventListener(name, (event) => event.stopPropagation()));
+      const point = (event) => {
+        const rect = ui.canvas.getBoundingClientRect();
+        return { x: ((event.clientX - rect.left) / rect.width) * ui.canvas.width, y: ((event.clientY - rect.top) / rect.height) * ui.canvas.height };
+      };
+      ['pointerdown', 'pointermove', 'pointerup', 'pointerleave'].forEach((name) => ui.canvas.addEventListener(name, (event) => {
+        if (game && game.onPointer) { game.onPointer(name, point(event), event); event.preventDefault(); }
+      }));
+      // While a mini game is open it owns the keyboard (no walking, no chat)
+      window.addEventListener('keydown', (event) => {
+        if (!isOpen()) return;
+        if (event.key === 'Escape') close();
+        else if (game && game.onKey) game.onKey(event);
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }, true);
+      window.addEventListener('keyup', (event) => { if (isOpen()) event.stopImmediatePropagation(); }, true);
+    }
+    function isOpen() { return !!root && root.style.display === 'flex'; }
+    function setText(text) { if (ui) ui.text.textContent = text; }
+    function setButtons(list) {
+      ui.buttons.textContent = '';
+      list.forEach(({ label, onClick, on, disabled }) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = label;
+        if (on) button.classList.add('on');
+        button.disabled = !!disabled;
+        button.addEventListener('click', () => onClick(button));
+        ui.buttons.appendChild(button);
+      });
+    }
+    function loop() {
+      if (!isOpen() || !game) return;
+      if (game.onFrame) game.onFrame(performance.now() / 1000, ui.canvas.getContext('2d'));
+      frame = requestAnimationFrame(loop);
+    }
+    function open(title, nextGame) {
+      ensure();
+      if (game && game.onClose) game.onClose();
+      game = nextGame;
+      ui.title.textContent = title;
+      root.style.display = 'flex';
+      window.dispatchEvent(new Event('blur')); // release held movement keys
+      if (game.init) game.init(ui.canvas.getContext('2d'));
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(loop);
+    }
+    function close() {
+      if (!root) return;
+      root.style.display = 'none';
+      cancelAnimationFrame(frame);
+      const closing = game;
+      game = null;
+      if (closing && closing.onClose) closing.onClose();
+    }
+    return { open, close, isOpen, setText, setButtons, get canvas() { return ui && ui.canvas; }, get game() { return game; } };
+  })();
+  window.SquidGameEE = window.SquidGameEE || {};
+  window.SquidGameEE.overlay = Overlay;
+
+  // ==========================================================================
+  // 2) REGEX HONEYCOMB (Dalgona): trace the shape without leaving the groove
+  // ==========================================================================
+  const HONEY_SHAPES = {
+    circle: () => [ringPath(320, 200, 110, 160)],
+    triangle: () => [polyPath([[320, 70], [450, 300], [190, 300]], 4)],
+    star: () => [polyPath(Array.from({ length: 10 }, (_, i) => { const angle = -Math.PI / 2 + (i * Math.PI) / 5; const r = i % 2 ? 54 : 130; return [320 + Math.cos(angle) * r, 205 + Math.sin(angle) * r]; }), 4)],
+    braces: () => [bracePath(255, 1), bracePath(385, -1)]
+  };
+  function ringPath(cx, cy, r, count) { const points = []; for (let i = 0; i <= count; i++) { const angle = (i / count) * Math.PI * 2; points.push([cx + Math.cos(angle) * r, cy + Math.sin(angle) * r]); } return points; }
+  function polyPath(corners, spacing) {
+    const points = [];
+    corners.forEach((corner, index) => {
+      const next = corners[(index + 1) % corners.length];
+      const steps = Math.max(1, Math.round(Math.hypot(next[0] - corner[0], next[1] - corner[1]) / spacing));
+      for (let s = 0; s < steps; s++) points.push([corner[0] + ((next[0] - corner[0]) * s) / steps, corner[1] + ((next[1] - corner[1]) * s) / steps]);
+    });
+    points.push(corners[0].slice());
+    return points;
+  }
+  // "{" (dir 1) or "}" (dir -1): ends curl outward, the middle tip points in
+  function bracePath(x0, dir) {
+    const points = [];
+    for (let i = 0; i <= 120; i++) {
+      const u = (i / 120) * 2 - 1;
+      const a = Math.abs(u);
+      const ends = a > 0.78 ? ((a - 0.78) / 0.22) ** 2 * 26 : 0;
+      const tip = a < 0.14 ? (1 - a / 0.14) * 30 : 0;
+      points.push([x0 + dir * (ends - tip) + dir * 6, 200 + u * 120]);
+    }
+    return points;
+  }
+  function openHoneycomb(anchor) {
+    const H = { state: 'pick', shape: null, strokes: [], samples: [], carved: 0, down: false, start: 0, limit: 45, crack: null, last: null };
+    const TOL_CARVE = 13;
+    const TOL_CRACK = 24;
+    function pick(name) {
+      H.shape = name;
+      H.strokes = HONEY_SHAPES[name]();
+      H.samples = [];
+      H.strokes.forEach((stroke) => stroke.forEach(([x, y]) => H.samples.push({ x, y, done: false })));
+      H.carved = 0;
+      H.state = 'play';
+      H.start = performance.now() / 1000;
+      H.crack = null;
+      Overlay.setText(`Hold the mouse button and trace the ${name === 'braces' ? 'curly braces' : name}. Stay inside the groove. ${H.limit} s.`);
+      Overlay.setButtons([{ label: 'Give up', onClick: () => lose('you gave up on the pattern') }]);
+    }
+    function nearest(point) {
+      let best = Infinity;
+      H.samples.forEach((sample) => { const d = Math.hypot(sample.x - point.x, sample.y - point.y); if (d < best) best = d; });
+      return best;
+    }
+    function lose(reason) {
+      if (H.state !== 'play') return;
+      H.state = 'lost';
+      Overlay.setText('CRACKED. Build failed.');
+      setTimeout(() => { Overlay.close(); buildFailed(GAMES.honey, reason, anchor, [-10, 0.1, 31]); }, 900);
+    }
+    function win() {
+      H.state = 'won';
+      Overlay.setText('Pattern carved clean. Build passed!');
+      setTimeout(() => { Overlay.close(); award(GAMES.honey); }, 900);
+    }
+    function carve(point) {
+      if (H.state !== 'play') return;
+      if (nearest(point) > TOL_CRACK) { H.crack = point; lose('the honeycomb cracked: you left the line'); return; }
+      H.samples.forEach((sample) => { if (!sample.done && Math.hypot(sample.x - point.x, sample.y - point.y) < TOL_CARVE) { sample.done = true; H.carved++; } });
+      if (H.carved / H.samples.length >= 0.97) win();
+    }
+    function draw(ctx, t) {
+      const w = 640;
+      const h = 380;
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = '#f3e6d8';
+      ctx.fillRect(0, 0, w, h);
+      // Tin and honeycomb candy
+      ctx.fillStyle = '#9aa3ab';
+      ctx.beginPath(); ctx.arc(320, 200, 176, 0, Math.PI * 2); ctx.fill();
+      const candy = ctx.createRadialGradient(300, 170, 20, 320, 200, 165);
+      candy.addColorStop(0, '#f2c46a');
+      candy.addColorStop(1, '#c98a2c');
+      ctx.fillStyle = candy;
+      ctx.beginPath(); ctx.arc(320, 200, 165, 0, Math.PI * 2); ctx.fill();
+      const random = seeded(99);
+      ctx.fillStyle = 'rgba(120, 70, 10, 0.18)';
+      for (let i = 0; i < 90; i++) { const angle = random() * Math.PI * 2; const r = random() * 155; ctx.beginPath(); ctx.arc(320 + Math.cos(angle) * r, 200 + Math.sin(angle) * r, 2 + random() * 5, 0, Math.PI * 2); ctx.fill(); }
+      if (H.state === 'pick') {
+        ctx.fillStyle = '#5b2a4a';
+        ctx.font = 'bold 26px Segoe UI, Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Pick a pattern to carve', 320, 205);
+        return;
+      }
+      // Groove
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      H.strokes.forEach((stroke) => {
+        ctx.strokeStyle = 'rgba(110, 60, 5, 0.55)';
+        ctx.lineWidth = 9;
+        ctx.beginPath();
+        stroke.forEach(([x, y], index) => (index ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+        ctx.stroke();
+      });
+      // Carved part
+      ctx.fillStyle = PINK;
+      H.samples.forEach((sample) => { if (sample.done) { ctx.beginPath(); ctx.arc(sample.x, sample.y, 4, 0, Math.PI * 2); ctx.fill(); } });
+      if (H.crack) {
+        ctx.strokeStyle = '#3a1d05';
+        ctx.lineWidth = 3;
+        for (let i = 0; i < 6; i++) { ctx.beginPath(); ctx.moveTo(H.crack.x, H.crack.y); ctx.lineTo(H.crack.x + Math.cos(i * 1.1) * 70, H.crack.y + Math.sin(i * 1.7) * 70); ctx.stroke(); }
+      }
+      // Needle and HUD
+      if (H.last) { ctx.fillStyle = '#4a4f57'; ctx.beginPath(); ctx.arc(H.last.x, H.last.y, 5, 0, Math.PI * 2); ctx.fill(); }
+      const left = Math.max(0, H.limit - (t - H.start));
+      ctx.fillStyle = '#3a2a3a';
+      ctx.textAlign = 'left';
+      ctx.font = 'bold 20px Segoe UI, Arial, sans-serif';
+      ctx.fillText(`Carved ${Math.floor((H.carved / H.samples.length) * 100)}%`, 16, 30);
+      ctx.textAlign = 'right';
+      ctx.fillText(`${left.toFixed(1)} s`, w - 16, 30);
+      ctx.fillStyle = left < 10 ? '#e03131' : TEAL;
+      ctx.fillRect(16, h - 18, (w - 32) * (left / H.limit), 8);
+    }
+    const game = {
+      H,
+      init(ctx) {
+        Overlay.setText('Regex Honeycomb: carve the pattern out of the candy without breaking it.');
+        Overlay.setButtons(Object.keys(HONEY_SHAPES).map((name) => ({ label: name === 'braces' ? '{ } braces' : name, onClick: () => pick(name) })));
+        draw(ctx, performance.now() / 1000);
+      },
+      onPointer(type, point) {
+        if (type === 'pointerdown') { H.down = true; H.last = point; carve(point); } else if (type === 'pointermove') { H.last = point; if (H.down) carve(point); } else H.down = false;
+      },
+      onFrame(t, ctx) {
+        if (H.state === 'play' && t - H.start > H.limit) lose('time is up (45 s)');
+        draw(ctx, t);
+      },
+      pick
+    };
+    window.SquidGameEE.honey = game;
+    Overlay.open('Regex Honeycomb', game);
+    return null;
+  }
+  function sgHoneycomb(group) {
+    const S = new THREE.Group();
+    // Stall: pastel back wall, striped awning, hexagon tables with candy tins
+    blk(S, 28, 4.4, 0.6, material(PASTEL.yellow, { roughness: 0.8 }), -11, 2.2, 39.6);
+    blk(S, 0.6, 4.4, 9, material(PASTEL.yellow, { roughness: 0.8 }), -25, 2.2, 35.4);
+    for (let i = 0; i < 14; i++) {
+      const stripe = blk(S, 2, 0.15, 7.6, material(i % 2 ? '#ffffff' : PINK, { roughness: 0.7 }), -24 + i * 2, 4.5, 36);
+      stripe.rotation.x = -0.08;
+    }
+    [[-24.6, 32.4], [2.4, 32.4]].forEach(([x, z]) => blk(S, 0.25, 4.5, 0.25, material(TEAL), x, 2.25, z));
+    group.add(signPlane(10, 1.8, { bg: '#ffffff', fg: PINK, title: 'REGEX HONEYCOMB', sub: 'carve the pattern, do not break the match', border: TEAL }, -11, 3.3, 39.28, 0));
+    const tableMaterial = material(PASTEL.pink, { roughness: 0.6 });
+    [-18, -10, -2].forEach((x) => {
+      const table = new THREE.Group();
+      table.position.set(x, 0, 35);
+      table.add(cylinder(1.1, 1.1, 0.9, tableMaterial, 0, 0.45, 0, 6));
+      table.add(cylinder(1.25, 1.25, 0.08, material('#ffffff'), 0, 0.94, 0, 6));
+      table.add(cylinder(0.55, 0.55, 0.08, material('#9aa3ab', { metalness: 0.7, roughness: 0.3 }), 0, 1.02, 0, 24));
+      table.add(cylinder(0.48, 0.48, 0.05, material('#d9a441', { roughness: 0.6 }), 0, 1.07, 0, 24));
+      action(table, 'Regex Honeycomb table', 'Press E to play Regex Honeycomb', () => openHoneycomb(group));
+      group.add(table);
+      // Hexagonal stools around each table
+      [[-1.8, 0], [1.8, 0]].forEach(([dx]) => S.add(mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.45, 6), material(TEAL), x + dx, 0.225, 35)));
+    });
+    addDrone(0, (t) => ({ x: -11 + Math.sin(t * 0.3) * 10, y: 5.6, z: 33, yaw: 0 }));
+    bake(group, S);
+  }
+
+  // ==========================================================================
+  // 3) MERGE CONFLICT TUG OF WAR: your branch vs main over the merge pit
+  // ==========================================================================
+  const TUG = { y: 6, z: 33, you: { x0: 18, x1: 32 }, main: { x0: 52, x1: 66 }, z0: 25, z1: 41 };
+  function sgTug(group) {
+    const S = new THREE.Group();
+    const { y: Y, z0, z1 } = TUG;
+    const depth = z1 - z0;
+    const cz = (z0 + z1) / 2;
+    // Each platform tilts around its outer edge (pivot group)
+    const makePlatform = (x0, x1, pivotX, color, label) => {
+      const pivot = new THREE.Group();
+      pivot.position.set(pivotX, Y, 0);
+      const width = x1 - x0;
+      const center = (x0 + x1) / 2 - pivotX;
+      blk(pivot, width, 0.6, depth, material(color, { roughness: 0.7 }), center, -0.3, cz);
+      blk(pivot, width, 0.2, 0.2, material(TEAL), center, 0.55, z0 + 0.1);
+      blk(pivot, width, 1.1, 0.2, material(TEAL), center, 0.55, z1 - 0.1);
+      blk(pivot, 0.2, 1.1, depth, material(TEAL), pivotX === x0 ? x0 - pivotX + 0.1 : x1 - pivotX - 0.1, 0.55, cz);
+      const sign = textSprite(label, { width: 6, background: color === PASTEL.mint ? 'rgba(20, 163, 154, 0.9)' : 'rgba(230, 0, 126, 0.9)' });
+      sign.position.set(center, 3.4, z0 + 2);
+      pivot.add(sign);
+      group.add(pivot);
+      return pivot;
+    };
+    const yours = makePlatform(TUG.you.x0, TUG.you.x1, TUG.you.x0, PASTEL.mint, 'YOUR BRANCH');
+    const mains = makePlatform(TUG.main.x0, TUG.main.x1, TUG.main.x1, PASTEL.pink, 'main');
+    // North railing of your deck leaves a gap where the stairs arrive
+    blk(yours, 8, 1.1, 0.2, material(TEAL), 9.5, 0.55, z0 + 0.1);
+    // Fixed supports under the decks
+    [[TUG.you.x0 + 1, TUG.you.x1 - 1], [TUG.main.x0 + 1, TUG.main.x1 - 1]].forEach(([a, b]) => [a, b].forEach((x) => [z0 + 1, z1 - 1].forEach((z) => blk(S, 0.8, Y - 0.9, 0.8, material(PASTEL.yellow), x, (Y - 0.9) / 2, z))));
+    // Stairs up to your deck (12 steps of 0.5 m)
+    for (let k = 0; k < 12; k++) blk(S, 3, 0.5, 0.8, material(k % 2 ? PASTEL.pink : PASTEL.lilac, { roughness: 0.7 }), 21.5, (k + 1) * 0.5 - 0.25, 15.6 + k * 0.8);
+    // The merge pit between the decks
+    group.add(floorDecal(20, depth, new THREE.MeshBasicMaterial({ map: lazyTexture(512, 512, (ctx, w, h) => {
+      ctx.fillStyle = '#2a0f22';
+      ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = 'rgba(255, 46, 136, 0.85)';
+      ctx.font = 'bold 44px Consolas, monospace';
+      ctx.textAlign = 'center';
+      ['<<<<<<< HEAD', '=======', '>>>>>>> main'].forEach((line, index) => ctx.fillText(line, w / 2, 170 + index * 90));
+      ctx.strokeStyle = 'rgba(20, 163, 154, 0.5)';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(20, 20, w - 40, h - 40);
+    }), toneMapped: false }), 42, 0.03, cz));
+    const fence = material(PINK, { roughness: 0.5 });
+    blk(S, 20, 1.2, 0.3, fence, 42, 0.6, z0 - 0.2);
+    blk(S, 20, 1.2, 0.3, fence, 42, 0.6, z1 + 0.2);
+    // Rope and knot (a pink flag)
+    const rope = mesh(new THREE.CylinderGeometry(0.09, 0.09, 1, 8), material('#d9c08f', { roughness: 0.9 }), 42, Y + 1.1, TUG.z);
+    rope.rotation.z = Math.PI / 2;
+    rope.scale.y = TUG.main.x0 - TUG.you.x1 + 4;
+    noRay(rope);
+    group.add(rope);
+    const knot = new THREE.Group();
+    knot.add(box(0.2, 1.6, 0.2, material('#ffffff'), 0, 0.4, 0));
+    knot.add(box(0.06, 0.8, 1, glow(HOT, 1.6), 0, 0.9, 0.5));
+    knot.position.set(42, Y + 1.1, TUG.z);
+    noRay(knot);
+    group.add(knot);
+    // Console on your deck
+    const consoleGroup = new THREE.Group();
+    consoleGroup.position.set(TUG.you.x0 + 2.5, 0, 38);
+    blk(consoleGroup, 1.4, 1.1, 1, material(PASTEL.lilac), 0, 0.55, 0);
+    consoleGroup.add(cylinder(0.4, 0.4, 0.15, glow(HOT, 1.5), 0, 1.15, 0, 20));
+    yours.add(consoleGroup);
+    consoleGroup.position.x -= TUG.you.x0;
+    action(consoleGroup, 'Tug of War console', 'Press E to start the Merge Conflict Tug of War', () => openTug());
+    const consoleSign = textSprite('E: start the tug of war', { width: 5, background: 'rgba(230, 0, 126, 0.9)' });
+    consoleSign.position.set(2.5, 2.6, 38);
+    yours.add(consoleSign);
+    // Main team: five pink drones holding the rope
+    const T = { pos: 0, tiltYours: 0, tiltMain: 0, fallAt: -10, until: 0, phase: 'idle' };
+    for (let i = 0; i < 5; i++) {
+      addDrone(i % 3, (t) => {
+        const baseX = TUG.main.x0 + 1.5 + i * 2.2 - T.pos * 2;
+        const fall = T.phase === 'mainFalls' ? Math.min(Y + 0.5, (clock() - T.fallAt) ** 2 * 9) : 0;
+        return { x: baseX, y: Y + 1.3 + Math.sin(t * 3 + i) * 0.12 - fall, z: TUG.z + (i % 2 ? 0.6 : -0.6), yaw: -Math.PI / 2 };
+      });
+    }
+    bake(group, S);
+
+    function restore() { T.phase = 'idle'; T.pos = 0; }
+    function openTug() {
+      if (T.phase !== 'idle') return 'The decks are still being reset. Try again in a moment.';
+      teleport(group, TUG.you.x1 - 2.5, Y + 0.1, TUG.z);
+      const G = { pos: 0, start: performance.now() / 1000, limit: 45, zone: 360, marker: 0, phase: 0, last: 0, state: 'play', flash: '' };
+      const ZONE = 110;
+      const game = {
+        G,
+        markerX: () => 80 + (Math.sin(G.phase) * 0.5 + 0.5) * 480,
+        init() {
+          Overlay.setText('Press SPACE when the white marker is inside the green zone. Off-beat presses slip. Pull the flag to your side!');
+          Overlay.setButtons([{ label: 'Give up', onClick: () => finish(false, 'you let go of the rope') }]);
+        },
+        onKey(event) {
+          if (event.key !== ' ' || event.repeat || G.state !== 'play') return;
+          const now = performance.now() / 1000;
+          if (now - G.last < 0.12) return;
+          G.last = now;
+          if (Math.abs(game.markerX() - G.zone) < ZONE / 2) { G.pos += 0.11; G.flash = 'PERFECT PULL'; G.zone = 140 + Math.random() * 360; } else { G.pos -= 0.03; G.flash = 'slipped'; }
+          play('click');
+        },
+        onFrame(t, ctx) {
+          const dt = Math.min(0.05, t - (G.prev || t));
+          G.prev = t;
+          if (G.state === 'play') {
+            G.phase += dt * 3.6;
+            G.pos -= dt * (0.07 + 0.03 * Math.sin(t * 1.7));
+            if (G.pos >= 1) finish(true);
+            else if (G.pos <= -1) finish(false, 'main pulled your branch into the merge pit');
+            else if (t - G.start > G.limit) finish(G.pos > 0, 'time ran out with main ahead');
+          }
+          T.pos = Math.max(-1, Math.min(1, G.pos));
+          drawTug(ctx, t);
+        },
+        onClose() { if (G.state === 'play') finish(false, 'you let go of the rope', true); }
+      };
+      function drawTug(ctx, t) {
+        const w = 640;
+        const h = 380;
+        ctx.fillStyle = '#bfe3f7';
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = '#2a0f22';
+        ctx.fillRect(230, 150, 180, 120);
+        ctx.fillStyle = PASTEL.mint;
+        ctx.fillRect(0, 140, 230, 18);
+        ctx.fillStyle = PASTEL.pink;
+        ctx.fillRect(410, 140, 230, 18);
+        ctx.font = 'bold 22px Segoe UI, Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = TEAL;
+        ctx.fillText('YOUR BRANCH', 115, 125);
+        ctx.fillStyle = PINK;
+        ctx.fillText('main', 525, 125);
+        ctx.strokeStyle = '#a8864a';
+        ctx.lineWidth = 6;
+        ctx.beginPath(); ctx.moveTo(40, 110); ctx.lineTo(600, 110); ctx.stroke();
+        const knotX = 320 - G.pos * 220;
+        ctx.fillStyle = HOT;
+        ctx.fillRect(knotX - 6, 80, 12, 50);
+        ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+        ctx.setLineDash([6, 6]);
+        ctx.beginPath(); ctx.moveTo(320, 60); ctx.lineTo(320, 140); ctx.stroke();
+        ctx.setLineDash([]);
+        // Rhythm meter
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(80, 300, 480, 34);
+        ctx.fillStyle = '#2fd46b';
+        ctx.fillRect(G.zone - ZONE / 2, 300, ZONE, 34);
+        ctx.fillStyle = '#16161c';
+        ctx.fillRect(game.markerX() - 3, 294, 6, 46);
+        ctx.fillStyle = '#3a2a3a';
+        ctx.font = 'bold 18px Segoe UI, Arial, sans-serif';
+        ctx.fillText(G.flash, 320, 285);
+        ctx.textAlign = 'right';
+        ctx.fillText(`${Math.max(0, G.limit - (t - G.start)).toFixed(0)} s`, w - 14, 28);
+        if (G.state !== 'play') { ctx.textAlign = 'center'; ctx.font = 'bold 40px Segoe UI, Arial, sans-serif'; ctx.fillStyle = G.state === 'won' ? TEAL : '#e03131'; ctx.fillText(G.state === 'won' ? 'MERGED. BUILD PASSED' : 'BUILD FAILED', 320, 230); }
+      }
+      function finish(won, reason, closing) {
+        if (G.state !== 'play') return;
+        G.state = won ? 'won' : 'lost';
+        T.pos = won ? 1 : -1;
+        const now = clock();
+        if (won) {
+          T.phase = 'mainFalls';
+          T.fallAt = now;
+          T.until = now + 4;
+          if (!closing) setTimeout(() => Overlay.close(), 1000);
+          award(GAMES.tug);
+        } else {
+          T.phase = 'youFall';
+          T.fallAt = now;
+          T.until = now + 3.5;
+          if (!closing) setTimeout(() => Overlay.close(), 900);
+          // Your deck tilts and you slide into the merge pit (soft landing), then respawn
+          setTimeout(() => teleport(group, 36, 0.3, TUG.z), closing ? 300 : 1100);
+          setTimeout(() => buildFailed(GAMES.tug, reason, group, [21.5, 0.1, 13.5]), closing ? 2600 : 3400);
+        }
+      }
+      game.finish = finish;
+      window.SquidGameEE.tugGame = game;
+      Overlay.open('Merge Conflict Tug of War', game);
+      return null;
+    }
+    T.open = openTug;
+    window.SquidGameEE = window.SquidGameEE || {};
+    window.SquidGameEE.tug = T;
+
+    animate(group, () => {
+      const t = clock();
+      T.now = t;
+      if (T.phase !== 'idle' && t > T.until) restore();
+      // Tilt by time (not per frame): 0.6 s down after a loss, eased back on reset
+      const dt = Math.min(0.5, t - (T.last || t));
+      T.last = t;
+      const ease = 1 - Math.exp(-dt * 4);
+      if (T.phase === 'youFall') T.tiltYours = -0.42 * Math.min(1, (t - T.fallAt) / 0.6); else T.tiltYours += (0 - T.tiltYours) * ease;
+      if (T.phase === 'mainFalls') T.tiltMain = 0.42 * Math.min(1, (t - T.fallAt) / 0.6); else T.tiltMain += (0 - T.tiltMain) * ease;
+      yours.rotation.z = T.tiltYours;
+      mains.rotation.z = T.tiltMain;
+      knot.position.x = 42 - T.pos * 8;
+      rope.visible = T.phase === 'idle' || Math.abs(T.pos) < 1;
+    });
+  }
+
+  // ==========================================================================
+  // 4) ODD OR EVEN COMMITS (marbles) in the village alley
+  // ==========================================================================
+  function openMarbles(anchor) {
+    const M = { you: 10, bot: 10, bet: 1, hidden: 0, state: 'play', reveal: null, rounds: 0 };
+    const hide = () => { M.hidden = 1 + Math.floor(Math.random() * Math.min(M.bot, 6)); };
+    function render() {
+      const ctx = Overlay.canvas.getContext('2d');
+      const w = 640;
+      const h = 380;
+      ctx.fillStyle = '#f7efe4';
+      ctx.fillRect(0, 0, w, h);
+      const bag = (x, label, count, color) => {
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.ellipse(x, 140, 110, 90, 0, 0, Math.PI * 2); ctx.fill();
+        const random = seeded(count * 7 + x);
+        for (let i = 0; i < count; i++) {
+          const angle = random() * Math.PI * 2;
+          const r = Math.sqrt(random()) * 70;
+          ctx.fillStyle = ['#e6007e', '#14a39a', '#ffc53d', '#4c6ef5'][i % 4];
+          ctx.beginPath(); ctx.arc(x + Math.cos(angle) * r, 140 + Math.sin(angle) * r * 0.7, 9, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.fillStyle = '#3a2a3a';
+        ctx.font = 'bold 22px Segoe UI, Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`${label}: ${count} commits`, x, 262);
+      };
+      bag(160, 'You', M.you, 'rgba(20, 163, 154, 0.25)');
+      bag(480, 'Bot', M.bot, 'rgba(230, 0, 126, 0.22)');
+      ctx.fillStyle = '#3a2a3a';
+      ctx.font = '20px Segoe UI, Arial, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(M.reveal || 'The bot squashed some commits in its hand. Odd or even?', 320, 310, 600);
+      ctx.font = 'bold 18px Segoe UI, Arial, sans-serif';
+      ctx.fillText(`Your bet: ${M.bet} commit${M.bet > 1 ? 's' : ''}`, 320, 345);
+      if (M.state !== 'play') { ctx.font = 'bold 42px Segoe UI, Arial, sans-serif'; ctx.fillStyle = M.state === 'won' ? TEAL : '#e03131'; ctx.fillText(M.state === 'won' ? 'BUILD PASSED' : 'BUILD FAILED', 320, 60); }
+    }
+    function buttons() {
+      const bets = [1, 2, 3].filter((value) => value <= M.you).map((value) => ({ label: `Bet ${value}`, on: M.bet === value, onClick: () => { M.bet = value; buttons(); render(); } }));
+      bets.push({ label: 'All in', on: M.bet === M.you && M.you > 3, onClick: () => { M.bet = M.you; buttons(); render(); } });
+      Overlay.setButtons([...bets, { label: 'ODD', onClick: () => guess(1) }, { label: 'EVEN', onClick: () => guess(0) }].map((button) => ({ ...button, disabled: M.state !== 'play' })));
+    }
+    function guess(parity) {
+      if (M.state !== 'play') return;
+      M.rounds++;
+      const right = M.hidden % 2 === parity;
+      const amount = Math.min(M.bet, right ? M.bot : M.you);
+      if (right) { M.you += amount; M.bot -= amount; } else { M.you -= amount; M.bot += amount; }
+      M.reveal = `The bot held ${M.hidden} (${M.hidden % 2 ? 'odd' : 'even'}). ${right ? `You win ${amount}.` : `You lose ${amount}.`}`;
+      play('click');
+      M.bet = Math.max(1, Math.min(M.bet, M.you));
+      if (M.bot <= 0) {
+        M.state = 'won';
+        setTimeout(() => { Overlay.close(); award(GAMES.marbles); }, 1100);
+      } else if (M.you <= 0) {
+        M.state = 'lost';
+        setTimeout(() => { Overlay.close(); buildFailed(GAMES.marbles, 'you ran out of commits', anchor, [2, 0.1, 48]); }, 1100);
+      } else hide();
+      buttons();
+      render();
+    }
+    hide();
+    const game = {
+      M,
+      guess,
+      init() { Overlay.setText('Odd or Even Commits: guess if the bot holds an odd or even number of commits. Win all of its commits to pass the build.'); buttons(); render(); }
+    };
+    window.SquidGameEE.marbles = game;
+    Overlay.open('Odd or Even Commits', game);
+    return null;
+  }
+  function sgMarbles(group) {
+    const S = new THREE.Group();
+    // Village alley: pastel house facades on both sides (show-set style)
+    const facadeColors = [PASTEL.pink, PASTEL.mint, PASTEL.yellow, PASTEL.lilac, PASTEL.sky];
+    const doorMaterial = material('#4a3a46', { roughness: 0.8 });
+    const windowMaterial = glow('#ffe8b0', 0.9);
+    const roofMaterial = material('#c96b7d', { roughness: 0.7 });
+    [[42.6, 1], [53.4, -1]].forEach(([z, facing], row) => {
+      for (let i = 0; i < 5; i++) {
+        const x = -22 + i * 5.6;
+        const height = 4.4 + ((i + row) % 3) * 0.8;
+        blk(S, 5.2, height, 1.2, material(facadeColors[(i + row * 2) % 5], { roughness: 0.85 }), x, height / 2, z);
+        blk(S, 5.5, 0.3, 1.8, roofMaterial, x, height + 0.15, z);
+        blk(S, 1.2, 2.3, 0.1, doorMaterial, x - 1.2, 1.15, z + facing * 0.62);
+        const pane = blk(S, 1.1, 0.9, 0.06, windowMaterial, x + 1.2, 2.4, z + facing * 0.63);
+        pane.castShadow = false;
+      }
+    });
+    // Lamps along the alley
+    [-20, -9, 2].forEach((x) => {
+      blk(S, 0.15, 3.6, 0.15, material('#3a3f4a', { metalness: 0.6 }), x, 1.8, 46);
+      S.add(sphere(0.32, glow('#ffd8a8', 1.8), x, 3.7, 46, 12));
+    });
+    // Marbles table at the far end
+    const table = new THREE.Group();
+    table.position.set(-21, 0, 48);
+    table.add(cylinder(1.2, 1.2, 0.1, material(PASTEL.cream), 0, 0.9, 0, 28));
+    table.add(cylinder(0.18, 0.3, 0.85, material('#3a3f4a'), 0, 0.43, 0, 12));
+    table.add(cylinder(0.45, 0.3, 0.3, material('#ffffff', { roughness: 0.3 }), 0, 1.1, 0, 20));
+    [0, 1, 2, 3, 4].forEach((i) => table.add(sphere(0.07, glow(['#e6007e', '#14a39a', '#ffc53d', '#4c6ef5', '#e6007e'][i], 0.6), Math.cos(i * 1.3) * 0.2, 1.25, Math.sin(i * 1.3) * 0.2, 8)));
+    action(table, 'Odd or Even Commits', 'Press E to play Odd or Even Commits (marbles)', () => openMarbles(group));
+    group.add(table);
+    const sign = textSprite('E: Odd or Even Commits', { width: 6, background: 'rgba(230, 0, 126, 0.9)' });
+    sign.position.set(-21, 3, 48);
+    group.add(sign);
+    addDrone(2, (t) => ({ x: -21 + Math.sin(t * 0.5) * 2, y: 4.2, z: 50.5, yaw: Math.PI }));
+    bake(group, S);
+  }
+
+  PropKit.registerBuilder(/^sgee_core$/, 'sgeeCore', sgCore);
+  PropKit.registerBuilder(/^sgee_redlight$/, 'sgeeRedLight', sgRedLight);
+  PropKit.registerBuilder(/^sgee_bridge$/, 'sgeeBridge', sgBridge);
+  PropKit.registerBuilder(/^sgee_dorm$/, 'sgeeDorm', sgDorm);
+  PropKit.registerBuilder(/^sgee_tug$/, 'sgeeTug', sgTug);
+  PropKit.registerBuilder(/^sgee_honeycomb$/, 'sgeeHoneycomb', sgHoneycomb);
+  PropKit.registerBuilder(/^sgee_marbles$/, 'sgeeMarbles', sgMarbles);
+})();

@@ -388,7 +388,23 @@
     }
     return placeAtlas;
   }
+  // A place can also bring its own card image ("cardImage" in worlds.json,
+  // e.g. a district logo) instead of a tile of the screenshot atlas
+  function drawCardImage(texture, world) {
+    const image = new Image();
+    image.onload = () => {
+      const ctx = texture.image.getContext('2d');
+      const w = texture.image.width - 32;
+      const scale = Math.min(w / image.width, 360 / image.height);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(16, 16, w, 360);
+      ctx.drawImage(image, 16 + (w - image.width * scale) / 2, 16 + (360 - image.height * scale) / 2, image.width * scale, image.height * scale);
+      texture.needsUpdate = true;
+    };
+    image.src = world.cardImage;
+  }
   function drawPlacePhoto(texture, world) {
+    if (world.cardImage) { drawCardImage(texture, world); return; }
     const index = (window.MULTIVERSE_WORLDS || []).indexOf(world);
     if (!world.photo || index < 0) return;
     placeAtlasImage().then((image) => {
@@ -553,7 +569,8 @@
     // Curved wall of event cards: each card jumps into a World
     eventsWall(group, { w, h, label }) {
       const radius = w / 2;
-      const worlds = (window.MULTIVERSE_WORLDS || []).filter((world) => world.world);
+      // Worlds, plus places marked "card": true in worlds.json
+      const worlds = (window.MULTIVERSE_WORLDS || []).filter((world) => world.world || world.card);
       const count = Math.max(worlds.length, 1);
       const arc = Math.PI * 0.7;
       group.add(mesh(new THREE.CylinderGeometry(radius + 0.4, radius + 0.4, h + 1, 48, 1, true, -arc / 2 - 0.08 + Math.PI, arc + 0.16), material('#2a1450', { side: THREE.DoubleSide }), 0, h / 2, 0));

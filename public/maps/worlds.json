@@ -802,5 +802,28 @@
   },
   "color": "#ffffff",
   "photo": true
+ },
+ {
+  "key": "squidgame",
+  "file": "map_squid_game.json",
+  "name": "Squid Game Epic Edition",
+  "description": "A developers edition of the survival-game show where nobody gets hurt: Red Build Green Build, Regex Honeycomb, Merge Conflict Tug of War, Odd or Even Commits, the Glass Bridge of Code Review and a dormitory with an MVC piggy bank",
+  "region": {
+   "center": [
+    0,
+    380
+   ],
+   "size": [
+    140,
+    110
+   ]
+  },
+  "color": "#e6007e",
+  "spawn": [
+   0,
+   -47
+  ],
+  "card": true,
+  "cardImage": "assets/squid-game-logo.jpg"
  }
 ]
