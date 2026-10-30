@@ -56,7 +56,6 @@ So, imagine to have a fun, useful and 3D virtual dimension world, just for devs 
 | `C` | Open / close Codify (code editor) |
 | `V` | Turn the sound of the video screens on / off |
 
----
 
 ## 💬 Chat commands
 
@@ -136,7 +135,6 @@ Type `/help` in game for the full list, or `/help <page>` for one section.
 | `/energy` | Green-Tech Sandbox | Show the district's renewable energy level |
 </details>
 
----
 
 <details>
   <summary><b> 🎁 Loot</b></summary>
@@ -241,7 +239,6 @@ The block `type` decides the model. Some of the recognized types: `floor`, `wall
 
 </details>
 
----
 
 <details>
   <summary><b>## ☁️ Deploying</b></summary>
