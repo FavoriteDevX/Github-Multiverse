@@ -933,6 +933,8 @@ function bindInputEvents() {
     if (event.key === 'Escape' && Metro.isOpen()) { Metro.close(); return; }
     if (event.key.toLowerCase() === 'e' && Vehicles.isMounted()) { Vehicles.dismount(); appendSystemMessage('You got off the vehicle.'); return; }
     if (event.key.toLowerCase() === 'e' && viewMode === 'explore' && LootSystem.tryOpen()) return;
+    // G picks up the nearest resource; held down it gathers everything nearby
+    if (event.key.toLowerCase() === 'g' && viewMode === 'explore') { if (!event.repeat) LootSystem.tryPickup(); else LootSystem.setPulling(true); return; }
     if (event.key.toLowerCase() === 'e' && viewMode === 'explore' && Interactions.handleKey(event)) return;
     // Space jumps right away (like Roblox); flying moved to F so fast jumps never toggle it
     if (event.key === ' ' && !event.repeat) jumpRequestedAt = performance.now();
@@ -947,7 +949,7 @@ function bindInputEvents() {
     if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(event.key.toLowerCase())) wakeUp();
     keysPressed.add(event.key.toLowerCase());
   });
-  window.addEventListener('keyup', (event) => keysPressed.delete(event.key.toLowerCase()));
+  window.addEventListener('keyup', (event) => { keysPressed.delete(event.key.toLowerCase()); if (event.key.toLowerCase() === 'g') LootSystem.setPulling(false); });
   window.addEventListener('blur', () => keysPressed.clear());
 
   ui.infoClose.addEventListener('click', closeInfoCard);
@@ -1244,7 +1246,7 @@ const HELP_PAGES = [
   ['Metro', 'N or /metro opens the transit map | /metro <place> rides the train there | walk through portals in Genesis Plaza'],
   ['Dungeon', '/bugs | /script <gc|try-catch|break|mutex|unit-test|reboot> | click bugs with the Git Commit Hammer'],
   ['Open Source HQ', '/mural <1-4> <code> | /pr <slot 1-8> <tree|lamp|banner|fountain|duck|flag|neon|bench> [hex] | /prs | /approve <n> | /merge <n> | /close <n>'],
-  ['Loot', 'E opens chests & supply drops: each one gives a real code file, downloaded to your computer | /loot (nearest chest)'],
+  ['Loot', 'E opens chests & supply drops: each one gives a real code file, downloaded to your computer | /loot (nearest chest) | E or G picks up resources (Code Crystals, Coffee Beans, RAM, Git Gems, Bug Fragments, API Tokens), hold G to gather everything nearby | /bag'],
   ['Keynote & Green-Tech', '/keynotes | /watch [n] | /stream <YouTube/Twitch URL> [title] | /endstream | /wear <hoodie|mug|cap|headphones|none> | /plant | /energy']
 ];
 

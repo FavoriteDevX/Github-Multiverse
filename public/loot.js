@@ -160,7 +160,7 @@ const LootSystem = (() => {
   }
 
   function tryOpen() {
-    if (!nearestLoot) return false;
+    if (!nearestLoot) return tryPickup();
     if (nearestLoot.landsAtLocal > performance.now()) { hooks.system('The supply drop is still falling!'); return true; }
     if (online()) hooks.socket.emit('loot_open', { id: nearestLoot.id });
     else openLocal(nearestLoot);
@@ -190,8 +190,10 @@ const LootSystem = (() => {
         nearestDistance = distance;
       }
     });
-    ui.prompt.style.display = nearestLoot ? 'block' : 'none';
+    updateResources(time, deltaSeconds);
+    ui.prompt.style.display = nearestLoot || nearestResource ? 'block' : 'none';
     if (nearestLoot) ui.prompt.textContent = nearestLoot.kind === 'drop' ? 'Press E to open the SUPPLY DROP' : 'Press E to open the chest';
+    else if (nearestResource) ui.prompt.textContent = `Press E or G to pick up the ${nearestResource.type.name} · hold G to gather everything nearby`;
 
     if (Math.floor(time * 4) !== Math.floor((time - deltaSeconds) * 4)) renderBuffs();
   }
@@ -204,6 +206,9 @@ const LootSystem = (() => {
 
   function command(name) {
     switch (name) {
+      case 'bag':
+        hooks.system(bagReport());
+        return true;
       case 'loot': {
         const avatar = hooks.avatarPosition();
         const available = Object.values(loots).filter((loot) => !loot.open).map((loot) => ({ loot, distance: Math.hypot(avatar.x - loot.x, avatar.z - loot.z) })).sort((a, b) => a.distance - b.distance);
@@ -239,9 +244,158 @@ const LootSystem = (() => {
     }
   }
 
+
+  // --------------------------------------------------------------------------
+  // Resources to gather: small items scattered along the paths and lawns of
+  // Genesis City. Walk up to one and press E or G to pick it up (it flies into
+  // your cursor); hold G to pull in everything within a few meters. They
+  // respawn after a while and are counted in your bag (/bag), kept in this
+  // browser.
+  // --------------------------------------------------------------------------
+  const RESOURCE_TYPES = [
+    { key: 'crystal', name: 'Code Crystal', color: '#4dd4ff', weight: 3 },
+    { key: 'coffee', name: 'Coffee Beans', color: '#8d5524', weight: 3 },
+    { key: 'ram', name: 'RAM Stick', color: '#2fb344', weight: 2 },
+    { key: 'gem', name: 'Git Gem', color: '#f05033', weight: 2 },
+    { key: 'bug', name: 'Bug Fragment', color: '#9c36b5', weight: 2 },
+    { key: 'token', name: 'API Token', color: '#ffd43b', weight: 1 }
+  ];
+  const PICK_DISTANCE = 3.2;
+  const PULL_DISTANCE = 9;
+  const RESPAWN_MS = 120000;
+  const resources = [];
+  let nearestResource = null;
+  let resourcesBuilt = false;
+  let pulling = false;
+  const flying = [];
+  let bag = {};
+  try { bag = JSON.parse(localStorage.getItem('multiverse-bag') || '{}') || {}; } catch (error) { bag = {}; }
+  const saveBag = () => { try { localStorage.setItem('multiverse-bag', JSON.stringify(bag)); } catch (error) { /* storage blocked */ } };
+
+  function resourceModel(type) {
+    const { material, glow, box } = PropKit.kit;
+    const group = new THREE.Group();
+    const shine = glow(type.color, 0.9);
+    if (type.key === 'crystal') {
+      [[0, 0.55, 0, 0.5], [0.28, 0.4, 0.12, 0.32], [-0.25, 0.38, -0.1, 0.28]].forEach(([x, y, z, r]) => { const c = new THREE.Mesh(new THREE.OctahedronGeometry(r, 0), shine); c.position.set(x, y, z); c.scale.y = 1.8; group.add(c); });
+    } else if (type.key === 'coffee') {
+      group.add(box(0.7, 0.55, 0.45, material('#c9a27a', { roughness: 1 }), 0, 0.28, 0));
+      for (let i = 0; i < 6; i++) { const bean = new THREE.Mesh(new THREE.SphereGeometry(0.09, 6, 4), material('#4a2b16')); bean.scale.set(1, 0.7, 1.3); bean.position.set((i % 3 - 1) * 0.16, 0.6, (i < 3 ? -1 : 1) * 0.08); group.add(bean); }
+    } else if (type.key === 'ram') {
+      group.add(box(0.95, 0.3, 0.06, shine, 0, 0.35, 0));
+      for (let i = 0; i < 4; i++) group.add(box(0.16, 0.16, 0.04, material('#1d1d1f'), -0.33 + i * 0.22, 0.38, 0.04));
+    } else if (type.key === 'gem') {
+      const gem = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.38, 0.16, 8), shine); gem.rotation.x = Math.PI / 2; gem.position.y = 0.5; group.add(gem);
+    } else if (type.key === 'bug') {
+      const shell = new THREE.Mesh(new THREE.SphereGeometry(0.32, 10, 8, 0, Math.PI * 2, 0, Math.PI / 2), shine); shell.scale.set(1, 0.7, 1.3); shell.position.y = 0.2; group.add(shell);
+      group.add(box(0.03, 0.02, 0.6, material('#1d1d1f'), 0, 0.42, 0));
+    } else {
+      group.add(box(0.75, 0.42, 0.04, shine, 0, 0.5, 0));
+      group.add(box(0.5, 0.06, 0.05, material('#1d1d1f'), 0, 0.5, 0.01));
+    }
+    // A soft halo on the ground makes them easy to spot
+    const halo = new THREE.Mesh(new THREE.RingGeometry(0.45, 0.62, 24), new THREE.MeshBasicMaterial({ color: type.color, transparent: true, opacity: 0.55, depthWrite: false }));
+    halo.rotation.x = -Math.PI / 2; halo.position.y = 0.04; group.add(halo);
+    group.traverse((node) => { node.castShadow = false; node.raycast = () => {}; });
+    return group;
+  }
+
+  function buildResources() {
+    const paths = (typeof City !== 'undefined' && City.paths) || [];
+    if (!paths.length) return;
+    resourcesBuilt = true;
+    let seed = 20261031;
+    const random = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    const total = RESOURCE_TYPES.reduce((sum, type) => sum + type.weight, 0);
+    const pickType = () => { let roll = random() * total; return RESOURCE_TYPES.find((type) => (roll -= type.weight) < 0) || RESOURCE_TYPES[0]; };
+    for (let i = 0; i < 140; i++) {
+      const path = paths[Math.floor(random() * paths.length)];
+      const [px, pz] = path[Math.floor(random() * path.length)];
+      const angle = random() * Math.PI * 2;
+      const x = px + Math.cos(angle) * (3 + random() * 6);
+      const z = pz + Math.sin(angle) * (3 + random() * 6);
+      if (Math.abs(x) > 395 || Math.abs(z) > 395) continue;
+      if (City.districtAt && City.districtAt(x, z)) continue;
+      if (City.seaAt && City.seaAt(x, z)) continue;
+      const type = pickType();
+      const model = resourceModel(type);
+      const y = hooks.groundHeightAt ? hooks.groundHeightAt(x, z, 20) : 0;
+      model.position.set(x, (Number.isFinite(y) ? y : 0) + 0.02, z);
+      model.userData.spin = random() * 6;
+      hooks.scene.add(model);
+      resources.push({ type, model, x, z, readyAt: 0 });
+    }
+  }
+
+  function collect(resource) {
+    resource.readyAt = performance.now() + RESPAWN_MS;
+    bag[resource.type.key] = (bag[resource.type.key] || 0) + 1;
+    saveBag();
+    flying.push({ model: resource.model, start: resource.model.position.clone(), t: 0, resource });
+    if (window.Sound) Sound.play('coin');
+    showPickup(resource.type);
+  }
+
+  function showPickup(type) {
+    ui.toast.innerHTML = '<span class="file"></span><div><small></small><b></b></div>';
+    ui.toast.querySelector('.file').textContent = `+1`;
+    ui.toast.querySelector('small').textContent = `RESOURCE · ${bag[type.key]} in your bag (/bag)`;
+    ui.toast.querySelector('b').textContent = type.name;
+    ui.toast.style.borderColor = type.color;
+    ui.toast.style.boxShadow = `0 0 30px ${type.color}aa`;
+    ui.toast.classList.remove('show');
+    void ui.toast.offsetWidth;
+    ui.toast.classList.add('show');
+  }
+
+  function tryPickup() {
+    if (!nearestResource) return false;
+    collect(nearestResource);
+    nearestResource = null;
+    return true;
+  }
+
+  function updateResources(time, deltaSeconds) {
+    if (!resourcesBuilt) { if (hooks && hooks.scene && Math.floor(time) % 2 === 0) buildResources(); return; }
+    const avatar = hooks.avatarPosition();
+    const now = performance.now();
+    nearestResource = null;
+    let best = PICK_DISTANCE;
+    resources.forEach((resource) => {
+      if (resource.readyAt > now) return;
+      const model = resource.model;
+      if (!model.visible) { model.visible = true; model.scale.setScalar(1); model.position.set(resource.x, model.position.y, resource.z); }
+      const distance = Math.hypot(avatar.x - resource.x, avatar.z - resource.z);
+      if (distance > 60) return;
+      model.rotation.y = time * 1.2 + model.userData.spin;
+      model.children[0].position.y = (model.children[0].userData.baseY ?? (model.children[0].userData.baseY = model.children[0].position.y)) + Math.sin(time * 2 + model.userData.spin) * 0.06;
+      if (Math.abs(avatar.y - model.position.y) > 3) return;
+      if (pulling && distance < PULL_DISTANCE) { collect(resource); return; }
+      if (distance < best) { best = distance; nearestResource = resource; }
+    });
+    // Picked items fly into the cursor, shrink and vanish
+    for (let i = flying.length - 1; i >= 0; i--) {
+      const item = flying[i];
+      item.t += deltaSeconds * 2.6;
+      const target = avatar.clone().add(new THREE.Vector3(0, 1.4, 0));
+      item.model.position.lerpVectors(item.start, target, Math.min(1, item.t));
+      item.model.position.y += Math.sin(Math.min(1, item.t) * Math.PI) * 1.2;
+      item.model.scale.setScalar(Math.max(0.05, 1 - item.t * 0.9));
+      if (item.t >= 1) { item.model.visible = false; item.model.position.set(item.resource.x, item.start.y, item.resource.z); flying.splice(i, 1); }
+    }
+  }
+
+  function bagReport() {
+    const lines = RESOURCE_TYPES.map((type) => `${type.name}: ${bag[type.key] || 0}`);
+    return `Your bag · ${lines.join(' · ')}`;
+  }
+
   function addBuff(name, seconds) {
     buffs[name] = performance.now() + seconds * 1000;
   }
 
-  return { init, update, tryOpen, command, modifiers, addBuff };
+  // G picks up (pressed) or gathers everything nearby (held)
+  function setPulling(value) { pulling = value; }
+
+  return { init, update, tryOpen, tryPickup, setPulling, command, modifiers, addBuff, resourceCount: () => resources.length, resourceSpots: () => resources.map((r) => [r.x, r.model.position.y, r.z, r.type.name]) };
 })();
