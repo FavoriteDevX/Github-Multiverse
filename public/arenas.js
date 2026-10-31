@@ -2607,7 +2607,7 @@
     // ---- Giant transparent piggy bank hanging from the ceiling ----
     const pig = new THREE.Group();
     pig.position.set(cx, 9.6, cz);
-    const glass = new THREE.MeshStandardMaterial({ color: '#ffc4dc', transparent: true, opacity: 0.26, roughness: 0.05, metalness: 0.1, depthWrite: false, side: THREE.DoubleSide });
+    const glass = new THREE.MeshStandardMaterial({ color: '#ff8fbf', emissive: '#ff5fa2', emissiveIntensity: 0.25, transparent: true, opacity: 0.42, roughness: 0.05, metalness: 0.1, depthWrite: false, side: THREE.DoubleSide });
     const body = mesh(new THREE.SphereGeometry(3.2, 32, 20), glass);
     body.scale.set(1.35, 1, 1);
     body.renderOrder = 3;
