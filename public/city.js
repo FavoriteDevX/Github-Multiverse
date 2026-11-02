@@ -464,7 +464,7 @@ const City = (() => {
     root.userData.districtKey = world.key;
 
     // Separate Worlds (big maps) float on their own island of land, far from Genesis City
-    if (world.world) root.add(buildWorldIsland(layout.size, world.key));
+    if (world.world) root.add(buildWorldIsland(layout.size, world.key, world.island));
 
     // Some scenes from the original maps were built small: "scale" in worlds.json
     // enlarges the whole scene (positions and sizes) to human scale
@@ -486,14 +486,19 @@ const City = (() => {
     return district;
   }
 
-  function buildWorldIsland(size, key) {
+  // style "bare" (worlds.json "island"): an empty concrete yard with no trees,
+  // like the closed compound of a game show
+  function buildWorldIsland(size, key, style) {
     const island = new THREE.Group();
     const radius = Math.max(size[0], size[1]) * 0.75 + 120;
-    const grass = new THREE.Mesh(new THREE.CircleGeometry(radius, 64), new THREE.MeshStandardMaterial({ map: repeated(PropKit.kit.grassTexture('#558a33'), radius / 5, radius / 5), roughness: 1 }));
+    const bare = style === 'bare';
+    const groundMap = bare ? repeated(PropKit.kit.concreteTexture('#9a9a96'), radius / 8, radius / 8) : repeated(PropKit.kit.grassTexture('#558a33'), radius / 5, radius / 5);
+    const grass = new THREE.Mesh(new THREE.CircleGeometry(radius, 64), new THREE.MeshStandardMaterial({ map: groundMap, roughness: 1 }));
     grass.rotation.x = -Math.PI / 2;
     grass.position.y = GROUND_LEVEL;
     grass.receiveShadow = true;
     island.add(grass);
+    if (bare) return island;
     // A ring of trees frames the World
     const random = seededRandom(key.length * 977);
     const count = 120;
