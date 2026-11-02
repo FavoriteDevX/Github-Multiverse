@@ -1438,8 +1438,9 @@
 // ============================================================================
 // SQUID GAME EPIC EDITION: A DEVELOPERS EDITION OF THE SURVIVAL-GAME SHOW
 // ============================================================================
-// District "squidgame" (worlds.json, map "map_squid_game.json" in
-// districts.json): a 140 x 110 m walled compound south of the Upland Gallery.
+// World "squidgame" (worlds.json, map "map_squid_game.json" in
+// districts.json): a separate world like Roblox's Round 6, a 140 x 110 m walled
+// compound on its own island, entered through JUMP IN, the metro or /world.
 // The look borrows the show's set design only (pastel walls, magenta and teal
 // accents, circle / triangle / square shapes everywhere, painted sky walls,
 // an Escher-like staircase maze, a dormitory of stacked bunks with a giant

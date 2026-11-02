@@ -9,7 +9,7 @@ const Metro = (() => {
     { name: 'Genesis Line', color: '#1877f2', stations: ['plaza', 'lobby', 'pavilion', 'agile', 'workspace', 'social', 'districts'] },
     { name: 'Arcade Line', color: '#e03131', stations: ['plaza', 'arcade', 'parkour', 'sandbox', 'retro', 'cyberpunk', 'gamer'] },
     { name: 'Leisure Line', color: '#2f9e44', stations: ['plaza', 'beach', 'zen', 'gallery', 'mall', 'apple', 'house', 'equalizer', 'hotel', 'villas'] },
-    { name: 'Worlds Express', color: '#fab005', stations: ['plaza', 'techsquare', 'museum', 'dungeon', 'opensource', 'keynote', 'greentech', 'valley'] }
+    { name: 'Worlds Express', color: '#fab005', stations: ['plaza', 'techsquare', 'museum', 'dungeon', 'opensource', 'keynote', 'greentech', 'valley', 'cryptovalley', 'jpegworld', 'squidgame'] }
   ];
   const RIDE_SECONDS = 7;
   let hooks = null;
