@@ -226,6 +226,33 @@ app.post('/api/login', (req, res) => {
   res.json({ token: createSession(username.toLowerCase()), username: user.username });
 });
 
+// Daily bonus: +50 MVC every 20 hours (socket "daily_bonus" in the game and
+// POST /api/daily from the launcher share the same rule)
+const DAILY_BONUS = 50;
+const DAILY_EVERY_MS = 20 * 60 * 60 * 1000;
+function claimDaily(account) {
+  const waitMs = DAILY_EVERY_MS - (Date.now() - (account.lastDaily || 0));
+  if (waitMs > 0) return { ok: false, waitMs };
+  account.lastDaily = Date.now();
+  account.coins = walletOf(account) + DAILY_BONUS;
+  saveAccounts();
+  return { ok: true };
+}
+
+// Launcher (the screen after login): balance and the daily bonus before the world opens
+app.get('/api/wallet', (req, res) => {
+  const user = userFromToken(req.get('x-session-token'));
+  if (!user) return res.status(401).json({ error: 'Session expired.' });
+  res.json({ username: user.username, coins: walletOf(user), nextDailyInMs: Math.max(0, DAILY_EVERY_MS - (Date.now() - (user.lastDaily || 0))) });
+});
+app.post('/api/daily', (req, res) => {
+  const user = userFromToken(req.get('x-session-token'));
+  if (!user) return res.status(401).json({ error: 'Session expired.' });
+  const result = claimDaily(user);
+  if (!result.ok) return res.status(429).json({ error: `Daily bonus already claimed. Come back in ${Math.ceil(result.waitMs / 3600000)} h.`, nextDailyInMs: result.waitMs, coins: walletOf(user) });
+  res.json({ coins: user.coins, earned: DAILY_BONUS, nextDailyInMs: DAILY_EVERY_MS });
+});
+
 // Reconnect a remembered device. If the account no longer exists (a server
 // with a fresh database, e.g. after a redeploy on a host without a persistent
 // disk), it is recreated for this device so the player is never stuck.
@@ -787,13 +814,9 @@ io.on('connection', (socket) => {
   // Vehicles from the Hypercar Showroom, shown to everyone in the lobby
   socket.emit('packages', account.packages || []);
   socket.on('daily_bonus', () => {
-    const now = Date.now();
-    const wait = 20 * 60 * 60 * 1000 - (now - (account.lastDaily || 0));
-    if (wait > 0) { socket.emit('system_message', `Daily bonus already claimed. Come back in ${Math.ceil(wait / 3600000)} h.`); return; }
-    account.lastDaily = now;
-    account.coins = walletOf(account) + 50;
-    saveAccounts();
-    socket.emit('wallet', { coins: account.coins, earned: 50, reason: 'daily bonus' });
+    const result = claimDaily(account);
+    if (!result.ok) { socket.emit('system_message', `Daily bonus already claimed. Come back in ${Math.ceil(result.waitMs / 3600000)} h.`); return; }
+    socket.emit('wallet', { coins: account.coins, earned: DAILY_BONUS, reason: 'daily bonus' });
   });
 
   // Underground Cafe: order dishes (code & tool packages) and drinks with MVC

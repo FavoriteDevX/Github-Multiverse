@@ -195,3 +195,258 @@ const Auth = (() => {
 
   return { signIn, signOut, hasServer };
 })();
+
+// ============================================================================
+// LAUNCHER: THE DASHBOARD AFTER LOGIN (EAGLERCRAFT / DECENTRALAND STYLE)
+// ============================================================================
+// After signing in, the dev lands on a launcher instead of straight in the
+// world: a top bar (logo, Home / Play / Servers / Worlds / Resource Packs /
+// News, the username and the MVC balance), a grid of entry points on the left
+// (Genesis Plaza, Gamer District, Underground Cafe, Private Lobby) and the big
+// launch panel on the right. "LAUNCH GAME" or a card's play button enters the
+// world at that spot. The daily bonus (+50 MVC every 20 hours) can be claimed
+// here. Card covers come from the place screenshots in assets/places.jpg.
+const Launcher = (() => {
+  const ATLAS = { columns: 8, rows: 6, extra: { underground: 46 } };
+  const ENTRIES = [
+    { key: 'plaza', title: 'Genesis Plaza', version: '26.3', popular: 4, date: 4, text: 'The heart of the Multiverse: Welcome Hall, Theatre, Events Wall, the firepit and the pool down to the Underground.' },
+    { key: 'gamer', title: 'Gamer District', version: '26.2', popular: 3, date: 3, text: 'The Gravity Flip tower, arcades, a LAN party and the mini-game arena.' },
+    { key: 'underground', title: 'Underground Cafe', version: '26.1', popular: 2, date: 2, text: 'Start below Genesis Plaza: the lounge, the cafe menu and the Hall of Internet & Software History.' },
+    { key: 'private', title: 'Private Lobby', version: 'Invite only', tile: 'lobby', popular: 1, date: 1, text: 'A new instance only the devs you invite can see. Share the link from the top bar once inside.' }
+  ];
+  const NEWS = [
+    ['Squid Game Epic Edition', 'A new world: Red Build Green Build, the Glass Bridge of Code Review and more. Nobody gets hurt, builds just fail.'],
+    ['Build your own scene', 'Buy a parcel and press B: Decentraland-style Builder with per-parcel limits, publish for everyone.'],
+    ['Gather resources', 'Code Crystals, Coffee Beans, RAM and Git Gems around Genesis City: E or G to pick up, hold G to gather.'],
+    ['House of MAC demo Macs', 'Try a working macOS-style desktop on the Avenue tables: Finder, Terminal, Notes, Calculator.'],
+    ['Realistic surfaces', 'Stone, brick, wood, glass and water got detailed textures with relief.']
+  ];
+  let worlds = [];
+  let state = null;
+
+  const esc = (text) => String(text).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  function tileStyle(key) {
+    const index = key in ATLAS.extra ? ATLAS.extra[key] : worlds.findIndex((world) => world.key === key);
+    const world = worlds[index];
+    if (index < 0 || (world && !world.photo && !(key in ATLAS.extra))) return world && world.cardImage ? `background-image:url(${world.cardImage});background-size:cover;background-position:center` : 'background:linear-gradient(135deg,#1f6feb,#8957e5)';
+    const col = index % ATLAS.columns;
+    const row = Math.floor(index / ATLAS.columns);
+    return `background-image:url(assets/places.jpg);background-size:${ATLAS.columns * 100}% ${ATLAS.rows * 100}%;background-position:${(col / (ATLAS.columns - 1)) * 100}% ${(row / (ATLAS.rows - 1)) * 100}%`;
+  }
+
+  function css() {
+    if (document.getElementById('launcher-style')) return;
+    const font = document.createElement('link');
+    font.rel = 'stylesheet';
+    font.href = 'https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Inter:wght@400;600;700&display=swap';
+    document.head.appendChild(font);
+    const style = document.createElement('style');
+    style.id = 'launcher-style';
+    style.textContent = `
+      #launcher { position: fixed; inset: 0; z-index: 80; overflow: auto; color: #e9ecef; font: 14px Inter, "Segoe UI", Arial, sans-serif;
+        background: radial-gradient(1200px 500px at 15% -10%, rgba(46, 160, 67, 0.28), transparent 60%), radial-gradient(900px 500px at 100% 0%, rgba(31, 111, 235, 0.22), transparent 60%), linear-gradient(180deg, #0f1115 0%, #15181f 100%); }
+      #launcher .ln-top { position: sticky; top: 0; z-index: 2; margin: 14px auto 0; width: min(1180px, calc(100% - 28px)); display: flex; align-items: center; gap: 16px; padding: 12px 18px; border-radius: 18px; background: rgba(24, 26, 32, 0.86); border: 1px solid rgba(255,255,255,0.07); backdrop-filter: blur(10px); box-sizing: border-box; flex-wrap: wrap; }
+      #launcher .ln-logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; letter-spacing: -0.02em; }
+      #launcher .ln-logo img { height: 28px; }
+      #launcher nav { display: flex; gap: 4px; flex-wrap: wrap; }
+      #launcher nav button { background: none; border: 0; color: #adb5bd; font: 600 13px Inter, sans-serif; padding: 7px 10px; border-radius: 10px; cursor: pointer; }
+      #launcher nav button:hover { color: #fff; }
+      #launcher nav button.on { background: rgba(255,255,255,0.1); color: #fff; }
+      #launcher .ln-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+      #launcher .ln-user { color: #ced4da; font-weight: 600; }
+      #launcher .ln-coins { font: 10px "Press Start 2P", monospace; padding: 9px 12px; border-radius: 12px; background: #f59f00; color: #1b1300; box-shadow: 0 0 18px rgba(245,159,0,0.35); white-space: nowrap; }
+      #launcher .ln-daily { font: 8px/1.4 "Press Start 2P", monospace; padding: 9px 12px; border-radius: 12px; border: 0; cursor: pointer; background: #2ea043; color: #fff; }
+      #launcher .ln-daily[disabled] { background: #2b3138; color: #8b949e; cursor: default; }
+      #launcher .ln-main { width: min(1180px, calc(100% - 28px)); margin: 26px auto 40px; display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 26px; align-items: start; }
+      @media (max-width: 900px) { #launcher .ln-main { grid-template-columns: 1fr; } }
+      #launcher .ln-tools { display: flex; gap: 10px; margin-bottom: 16px; }
+      #launcher .ln-search { flex: 1; max-width: 280px; padding: 11px 14px; border-radius: 14px; border: 1px solid rgba(255,255,255,0.08); background: #1e2229; color: #fff; font: inherit; }
+      #launcher .ln-sort { padding: 10px 12px; border-radius: 14px; border: 1px solid rgba(255,255,255,0.08); background: #1e2229; color: #fff; font: inherit; }
+      #launcher .ln-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 18px; }
+      #launcher .ln-card { cursor: pointer; }
+      #launcher .ln-cover { aspect-ratio: 3 / 4; border-radius: 18px; border: 3px solid transparent; position: relative; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.35); transition: transform 0.15s; }
+      #launcher .ln-card:hover .ln-cover { transform: translateY(-3px); }
+      #launcher .ln-card.on .ln-cover { border-color: #3fb950; box-shadow: 0 0 0 2px rgba(63,185,80,0.25), 0 10px 30px rgba(0,0,0,0.35); }
+      #launcher .ln-cover::after { content: ''; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,0.05) 40%, rgba(0,0,0,0.65) 100%); }
+      #launcher .ln-cover b { position: absolute; left: 12px; right: 12px; top: 12px; z-index: 1; font: 11px/1.5 "Press Start 2P", monospace; color: #fff; text-shadow: 0 2px 0 #000, 0 0 8px rgba(0,0,0,0.8); }
+      #launcher .ln-card-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
+      #launcher .ln-card-foot span { font: 12px "Press Start 2P", monospace; color: #fff; }
+      #launcher .ln-play { width: 34px; height: 34px; border-radius: 50%; border: 0; background: #2ea043; color: #fff; font-size: 13px; cursor: pointer; box-shadow: 0 0 0 4px rgba(46,160,67,0.18); }
+      #launcher .ln-play:hover { background: #3fb950; }
+      #launcher .ln-panel { position: sticky; top: 96px; padding: 18px; border-radius: 22px; background: #1c1f26; border: 1px solid rgba(255,255,255,0.07); box-shadow: 0 20px 50px rgba(0,0,0,0.4); }
+      #launcher .ln-hero { aspect-ratio: 16 / 10; border-radius: 16px; }
+      #launcher .ln-title { display: flex; align-items: center; gap: 12px; margin: 18px 0 10px; }
+      #launcher .ln-title i { width: 44px; height: 44px; border-radius: 10px; background: #2ea043 url(assets/icon.png) center / 70% no-repeat; flex: none; }
+      #launcher .ln-title h2 { margin: 0; font: 15px/1.6 "Press Start 2P", monospace; letter-spacing: 0.02em; }
+      #launcher .ln-desc { color: #adb5bd; line-height: 1.55; margin: 0 0 16px; padding-bottom: 16px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+      #launcher .ln-launch-row { display: flex; gap: 10px; align-items: center; }
+      #launcher .ln-launch { flex: 1; padding: 15px; border-radius: 18px; border: 0; background: linear-gradient(180deg, #3fb950, #2ea043); color: #fff; font: 13px "Press Start 2P", monospace; cursor: pointer; box-shadow: 0 6px 0 #1a7f37, 0 10px 30px rgba(46,160,67,0.35); }
+      #launcher .ln-launch:active { transform: translateY(3px); box-shadow: 0 3px 0 #1a7f37; }
+      #launcher .ln-launch[disabled] { filter: grayscale(0.6); cursor: progress; }
+      #launcher .ln-gear { width: 50px; height: 50px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.12); background: #262a32; color: #fff; font-size: 20px; cursor: pointer; }
+      #launcher .ln-settings { display: none; margin-top: 14px; padding: 12px; border-radius: 14px; background: #262a32; }
+      #launcher .ln-settings label { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; color: #ced4da; }
+      #launcher .ln-settings select { background: #1c1f26; color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 5px 8px; }
+      #launcher .ln-entry { margin-top: 12px; font-size: 12px; color: #8b949e; }
+      #launcher .ln-list { display: grid; gap: 12px; }
+      #launcher .ln-row { display: flex; gap: 14px; align-items: center; padding: 14px; border-radius: 16px; background: #1c1f26; border: 1px solid rgba(255,255,255,0.06); }
+      #launcher .ln-row h3 { margin: 0 0 4px; font-size: 15px; }
+      #launcher .ln-row p { margin: 0; color: #adb5bd; }
+      #launcher .ln-dot { width: 10px; height: 10px; border-radius: 50%; background: #3fb950; box-shadow: 0 0 8px #3fb950; flex: none; }
+      #launcher .ln-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); padding: 12px 18px; border-radius: 14px; background: #1c1f26; border: 1px solid rgba(255,255,255,0.12); display: none; z-index: 3; }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function request(url, options = {}) {
+    const headers = { 'Content-Type': 'application/json', 'x-session-token': state.session.token };
+    return fetch(url, { ...options, headers }).then(async (response) => ({ ok: response.ok, data: await response.json().catch(() => ({})) }));
+  }
+
+  function toast(text) {
+    const box = state.root.querySelector('.ln-toast');
+    box.textContent = text;
+    box.style.display = 'block';
+    clearTimeout(state.toastTimer);
+    state.toastTimer = setTimeout(() => { box.style.display = 'none'; }, 3200);
+  }
+
+  function renderWallet() {
+    const coins = state.root.querySelector('.ln-coins');
+    const daily = state.root.querySelector('.ln-daily');
+    coins.textContent = state.coins === null ? 'MVC · solo' : `${state.coins} MVC`;
+    if (!Auth.hasServer) { daily.disabled = true; daily.textContent = 'Daily bonus · online only'; return; }
+    const wait = Math.max(0, (state.nextDailyAt || 0) - Date.now());
+    daily.disabled = wait > 0;
+    daily.textContent = wait > 0 ? `Next bonus in ${Math.ceil(wait / 3600000)} h` : 'Claim daily bonus (+50 MVC)';
+  }
+
+  function cardHtml(entry) {
+    return `<div class="ln-card${state.selected === entry.key ? ' on' : ''}" data-key="${entry.key}">
+      <div class="ln-cover" style="${tileStyle(entry.tile || entry.key)}"><b>${esc(entry.title)}</b></div>
+      <div class="ln-card-foot"><span>${esc(entry.version)}</span><button class="ln-play" data-play="${entry.key}" title="Play ${esc(entry.title)}">&#9654;</button></div></div>`;
+  }
+
+  function renderLeft() {
+    const left = state.root.querySelector('.ln-left');
+    const tab = state.tab;
+    if (tab === 'home' || tab === 'play' || tab === 'worlds') {
+      const query = (state.query || '').toLowerCase();
+      let list = tab === 'worlds'
+        ? worlds.filter((world) => world.key !== 'plaza').map((world, i) => ({ key: world.key, title: world.name, version: world.world ? 'World' : 'District', popular: world.world ? 2 : 1, date: i, text: world.description }))
+        : ENTRIES.slice();
+      list = list.filter((entry) => !query || `${entry.title} ${entry.version}`.toLowerCase().includes(query));
+      const sort = state.sort || 'popular';
+      list.sort((a, b) => (sort === 'az' ? a.title.localeCompare(b.title) : sort === 'newest' ? b.date - a.date : b.popular - a.popular));
+      left.innerHTML = `<div class="ln-tools"><input class="ln-search" placeholder="Search versions..." value="${esc(state.query || '')}"/>
+        <select class="ln-sort"><option value="popular"${sort === 'popular' ? ' selected' : ''}>Popular</option><option value="newest"${sort === 'newest' ? ' selected' : ''}>Newest</option><option value="az"${sort === 'az' ? ' selected' : ''}>A-Z</option></select></div>
+        <div class="ln-grid">${list.map(cardHtml).join('') || '<p style="color:#8b949e">Nothing found.</p>'}</div>`;
+      const search = left.querySelector('.ln-search');
+      search.addEventListener('input', () => { state.query = search.value; const caret = search.selectionStart; renderLeft(); const again = state.root.querySelector('.ln-search'); again.focus(); again.setSelectionRange(caret, caret); });
+      left.querySelector('.ln-sort').addEventListener('change', (event) => { state.sort = event.target.value; renderLeft(); });
+      state.visible = list;
+      left.querySelectorAll('.ln-card').forEach((card) => card.addEventListener('click', (event) => {
+        if (event.target.closest('.ln-play')) return;
+        select(card.dataset.key);
+      }));
+      left.querySelectorAll('[data-play]').forEach((button) => button.addEventListener('click', () => launch(button.dataset.play)));
+    } else if (tab === 'servers') {
+      left.innerHTML = `<div class="ln-list">
+        <div class="ln-row"><span class="ln-dot" style="${Auth.hasServer ? '' : 'background:#f59f00;box-shadow:0 0 8px #f59f00'}"></span><div style="flex:1"><h3>Genesis · main server</h3><p>${Auth.hasServer ? 'Online · multiplayer, chat, land and scenes' : 'Solo mode: no multiplayer server on this host'}</p></div><button class="ln-play" data-play="plaza">&#9654;</button></div>
+        <div class="ln-row"><span class="ln-dot"></span><div style="flex:1"><h3>Private lobby</h3><p>Your own instance: only devs with the invite link see you</p></div><button class="ln-play" data-play="private">&#9654;</button></div></div>`;
+      left.querySelectorAll('[data-play]').forEach((button) => button.addEventListener('click', () => launch(button.dataset.play)));
+    } else if (tab === 'packs') {
+      let quality = 'auto';
+      let sound = true;
+      try { quality = localStorage.getItem('multiverse-quality') || 'auto'; sound = localStorage.getItem('multiverse-sound') !== 'off'; } catch (error) { /* storage blocked */ }
+      left.innerHTML = `<div class="ln-list">${[['minimum', 'Potato', 'Old computers: no shadows, short view distance'], ['low', 'Light', 'Laptops and integrated graphics'], ['medium', 'Default', 'Balanced look and speed'], ['high', 'Ultra', 'Big shadows and the longest view distance'], ['auto', 'Auto', 'The game picks and adapts while you play']].map(([value, name, text]) => `<div class="ln-row"><div style="flex:1"><h3>${name} graphics pack</h3><p>${text}</p></div><button class="ln-play" data-pack="${value}" style="${quality === value ? '' : 'background:#30363d'}">${quality === value ? '&#10003;' : '+'}</button></div>`).join('')}
+        <div class="ln-row"><div style="flex:1"><h3>Sound pack</h3><p>Mouse glide, firepits, birds and the night soundtrack</p></div><button class="ln-play" data-sound="1" style="${sound ? '' : 'background:#30363d'}">${sound ? '&#10003;' : '+'}</button></div></div>`;
+      left.querySelectorAll('[data-pack]').forEach((button) => button.addEventListener('click', () => { try { localStorage.setItem('multiverse-quality', button.dataset.pack); } catch (error) { /* storage blocked */ } renderLeft(); toast('Graphics pack applied when the world opens.'); }));
+      left.querySelector('[data-sound]').addEventListener('click', () => { try { localStorage.setItem('multiverse-sound', sound ? 'off' : 'on'); } catch (error) { /* storage blocked */ } renderLeft(); });
+    } else if (tab === 'news') {
+      left.innerHTML = `<div class="ln-list">${NEWS.map(([title, text]) => `<div class="ln-row"><div><h3>${esc(title)}</h3><p>${esc(text)}</p></div></div>`).join('')}</div>`;
+    }
+  }
+
+  function select(key) {
+    state.selected = key;
+    const entry = ENTRIES.find((item) => item.key === key) || (() => { const world = worlds.find((item) => item.key === key); return world && { key, title: world.name, text: world.description }; })() || ENTRIES[0];
+    state.root.querySelector('.ln-hero').setAttribute('style', tileStyle(entry.tile || entry.key));
+    state.root.querySelector('.ln-entry').textContent = `Starting point: ${entry.title}`;
+    state.root.querySelectorAll('.ln-card').forEach((card) => card.classList.toggle('on', card.dataset.key === key));
+  }
+
+  function launch(key) {
+    const target = key || state.selected || 'plaza';
+    if (target === 'private' && !new URLSearchParams(location.search).get('lobby')) {
+      const id = Math.random().toString(36).slice(2, 8);
+      location.search = `?lobby=${id}`;
+      return;
+    }
+    const button = state.root.querySelector('.ln-launch');
+    button.disabled = true;
+    button.textContent = 'LOADING WORLD...';
+    Promise.resolve(state.ready).then(() => {
+      state.root.remove();
+      state.resolve({ session: state.session, entry: target === 'private' ? 'plaza' : target });
+    });
+  }
+
+  // Shows the launcher; resolves with { session, entry } when the dev launches
+  function open(session, ready) {
+    css();
+    return new Promise(async (resolve) => {
+      worlds = await fetch('maps/worlds.json').then((response) => response.json()).catch(() => []);
+      const root = document.createElement('div');
+      root.id = 'launcher';
+      root.innerHTML = `
+        <header class="ln-top"><div class="ln-logo"><img src="assets/logo.png" alt="GitHub Multiverse"/></div>
+          <nav>${[['home', 'Home'], ['play', 'Play'], ['servers', 'Servers'], ['worlds', 'Worlds'], ['packs', 'Resource Packs'], ['news', 'News']].map(([key, name]) => `<button data-tab="${key}"${key === 'play' ? ' class="on"' : ''}>${name}</button>`).join('')}</nav>
+          <div class="ln-right"><span class="ln-user">${esc(session.username)}</span><span class="ln-coins">... MVC</span><button class="ln-daily" type="button">Claim daily bonus (+50 MVC)</button></div></header>
+        <main class="ln-main"><section class="ln-left"></section>
+          <aside class="ln-panel"><div class="ln-hero"></div>
+            <div class="ln-title"><i></i><h2>GITHUB MULTIVERSE v1.0</h2></div>
+            <p class="ln-desc">The developers' metaverse in your browser: walk Genesis City as a 3D cursor, code with Codify, fry your bugs at the firepits, buy land and build scenes, and jump into worlds like Silicon Valley and Squid Game Epic Edition.</p>
+            <div class="ln-launch-row"><button class="ln-launch" type="button">&#9654; LAUNCH GAME</button><button class="ln-gear" type="button" title="Settings">&#9881;</button></div>
+            <div class="ln-settings"><label>Graphics <select class="ln-quality"><option value="auto">Auto</option><option value="minimum">Minimum</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+              <label>Sound <input type="checkbox" class="ln-sound"/></label><label>Sign out <button type="button" class="ln-signout" style="background:#30363d;color:#fff;border:0;border-radius:8px;padding:5px 10px;cursor:pointer">Sign out</button></label></div>
+            <p class="ln-entry"></p></aside></main>
+        <div class="ln-toast"></div>`;
+      document.body.appendChild(root);
+      state = { root, session, ready, resolve, tab: 'play', selected: 'plaza', coins: Auth.hasServer ? 0 : null, nextDailyAt: 0 };
+      renderLeft();
+      select('plaza');
+      renderWallet();
+      root.querySelectorAll('nav button').forEach((button) => button.addEventListener('click', () => {
+        state.tab = button.dataset.tab;
+        root.querySelectorAll('nav button').forEach((other) => other.classList.toggle('on', other === button));
+        renderLeft();
+      }));
+      root.querySelector('.ln-launch').addEventListener('click', () => launch());
+      // Settings (gear): graphics quality, sound, sign out
+      const settings = root.querySelector('.ln-settings');
+      root.querySelector('.ln-gear').addEventListener('click', () => { settings.style.display = settings.style.display === 'block' ? 'none' : 'block'; });
+      const quality = root.querySelector('.ln-quality');
+      const sound = root.querySelector('.ln-sound');
+      try { quality.value = localStorage.getItem('multiverse-quality') || 'auto'; sound.checked = localStorage.getItem('multiverse-sound') !== 'off'; } catch (error) { /* storage blocked */ }
+      quality.addEventListener('change', () => { try { localStorage.setItem('multiverse-quality', quality.value); } catch (error) { /* storage blocked */ } });
+      sound.addEventListener('change', () => { try { localStorage.setItem('multiverse-sound', sound.checked ? 'on' : 'off'); } catch (error) { /* storage blocked */ } });
+      root.querySelector('.ln-signout').addEventListener('click', () => Auth.signOut());
+      // Wallet and daily bonus
+      if (Auth.hasServer) {
+        request('/api/wallet').then(({ ok, data }) => { if (ok) { state.coins = data.coins; state.nextDailyAt = Date.now() + (data.nextDailyInMs || 0); renderWallet(); } }).catch(() => {});
+      }
+      root.querySelector('.ln-daily').addEventListener('click', () => {
+        request('/api/daily', { method: 'POST' }).then(({ ok, data }) => {
+          if (typeof data.coins === 'number') state.coins = data.coins;
+          state.nextDailyAt = Date.now() + (data.nextDailyInMs || 0);
+          renderWallet();
+          toast(ok ? `+${data.earned} MVC daily bonus claimed!` : data.error || 'Could not claim the bonus.');
+        }).catch(() => toast('Could not reach the server.'));
+      });
+      setInterval(renderWallet, 60000);
+    });
+  }
+
+  return { open };
+})();

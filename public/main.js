@@ -1997,9 +1997,28 @@ const universeReady = plazaReady.then(() => {
   if (plaza) flyTo(placeLanding(plaza), null);
 });
 
-Promise.all([Auth.signIn(), universeReady]).then(([session]) => {
+// After login the launcher (auth.js) opens; LAUNCH GAME or a card's play
+// button enters the world at the chosen spot once it has finished loading
+const launched = Auth.signIn().then((session) => Launcher.open(session, universeReady));
+
+// Where the launcher's play buttons drop the dev
+function enterFromLauncher(entry) {
+  let quality = null;
+  let sound = null;
+  try { quality = localStorage.getItem('multiverse-quality'); sound = localStorage.getItem('multiverse-sound'); } catch (error) { quality = null; }
+  if (quality) Quality.choose(quality);
+  if (sound) Sound.setEnabled(sound !== 'off');
+  if (entry === 'underground') {
+    interactionHooks().setAvatarPosition(new THREE.Vector3(-62, -59.6, 30));
+    appendSystemMessage('Welcome to the Underground Cafe, below Genesis Plaza. E at the menu to order.');
+  } else if (entry && entry !== 'plaza' && findPlace(entry)) teleportToPlace(findPlace(entry));
+}
+
+Promise.all([launched, universeReady]).then(([launch]) => {
+  const session = launch.session;
   if (Auth.hasServer) socket = io({ auth: { token: session.token, lobby: lobbyId } });
   setupNetwork(session);
+  enterFromLauncher(launch.entry);
   // First time only: customize the cursor before entering (Decentraland-style).
   // A look saved in this browser or in the account (server) skips it.
   let customized = false;
