@@ -478,7 +478,7 @@ const Launcher = (() => {
     });
   }
 
-  return { open };
+  return { open, currentVersion: () => VERSIONS[0].version };
 })();
 
 // ============================================================================

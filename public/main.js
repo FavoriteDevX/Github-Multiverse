@@ -2115,3 +2115,155 @@ Promise.all([launched, universeReady]).then(([launch]) => {
   appendSystemMessage(`Welcome to GitHub Multiverse, ${session.username}! Walk with W A S D, jump with Space, run with Shift, drag to look around, M for the map.`);
   appendSystemMessage('Open chests with E: each one gives a real code file that is downloaded to your computer. Press Enter (or T, or /) to chat. Type /help for every command.');
 });
+
+// ============================================================================
+// THEATER MODE: ESC SHRINKS THE GAME INTO A WINDOW (EAGLERCRAFT PLAYER STYLE)
+// ============================================================================
+// Esc with nothing open steps out of the game: it keeps running in a smaller
+// frame in the middle of the page, with a bar below it (version, fullscreen,
+// controls, reload, more, exit to the launcher). Esc again, the fullscreen
+// button or a click on the game goes back in. Keys do nothing while outside.
+const Theater = (() => {
+  const ICONS = {
+    full: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+    keys: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/>',
+    reload: '<path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/>',
+    more: '<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>',
+    power: '<path d="M12 3v9M6.3 7.3a8 8 0 1 0 11.4 0"/>'
+  };
+  const icon = (name) => `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[name]}</svg>`;
+  let bar = null;
+  let active = false;
+
+  function css() {
+    const style = document.createElement('style');
+    style.textContent = `
+      body.theater { background: radial-gradient(900px 260px at 50% -60px, rgba(46, 160, 67, 0.22), transparent 70%), #0f1115; }
+      body.theater > *:not(canvas):not(#theater) { visibility: hidden !important; }
+      body.theater > canvas { position: fixed !important; left: 50% !important; top: 32px !important; inset: auto; transform: translateX(-50%);
+        width: min(960px, calc(100vw - 32px), calc((100vh - 150px) * 16 / 9)) !important; height: auto !important; aspect-ratio: 16 / 9; object-fit: cover;
+        border: 1px solid rgba(255, 255, 255, 0.08); box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55); cursor: pointer !important; filter: none !important; }
+      #theater { display: none; position: fixed; left: 50%; transform: translateX(-50%); z-index: 2147483000; align-items: center; gap: 12px; padding: 10px 12px 10px 14px; border-radius: 18px;
+        background: #1c1f26; border: 1px solid rgba(255, 255, 255, 0.08); color: #fff; font: 600 14px Inter, "Segoe UI", Arial, sans-serif; box-sizing: border-box; }
+      body.theater #theater { display: flex; }
+      #theater .th-logo { width: 32px; height: 32px; border-radius: 8px; background: #2ea043 url(assets/icon.png) center / 72% no-repeat; flex: none; }
+      #theater .th-name { font: 13px "Press Start 2P", monospace; letter-spacing: 0.02em; white-space: nowrap; }
+      #theater .th-place { color: #8b949e; font-weight: 500; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      #theater .th-gap { flex: 1; }
+      #theater button { width: 40px; height: 40px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.12); background: #262a32; color: #e9ecef; cursor: pointer; display: grid; place-items: center; flex: none; }
+      #theater button:hover { background: #30363d; }
+      #theater button.th-power { background: #5c1f24; border-color: #7d2a31; color: #ff8a8a; }
+      #theater .th-pop { display: none; position: absolute; right: 0; bottom: 58px; min-width: 240px; padding: 12px 14px; border-radius: 14px; background: #1c1f26; border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5); font-weight: 500; font-size: 13px; line-height: 1.8; color: #ced4da; }
+      #theater .th-pop.open { display: block; }
+      #theater .th-pop b { color: #fff; }
+      #theater .th-pop a { display: block; color: #e9ecef; text-decoration: none; cursor: pointer; padding: 2px 0; }
+      #theater .th-pop a:hover { color: #3fb950; }
+      @media (max-width: 560px) { #theater .th-place { display: none; } #theater button { width: 36px; height: 36px; } }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function build() {
+    css();
+    bar = document.createElement('div');
+    bar.id = 'theater';
+    bar.innerHTML = `<span class="th-logo"></span><span class="th-name"></span><span class="th-place"></span><span class="th-gap"></span>
+      <button type="button" data-act="full" title="Back to the game (Esc)">${icon('full')}</button>
+      <button type="button" data-act="keys" title="Controls">${icon('keys')}</button>
+      <button type="button" data-act="reload" title="Reload">${icon('reload')}</button>
+      <button type="button" data-act="more" title="More">${icon('more')}</button>
+      <button type="button" class="th-power" data-act="power" title="Exit to the launcher">${icon('power')}</button>
+      <div class="th-pop" data-pop="keys"><b>Controls</b><br>W A S D walk · Shift run · Space jump<br>Drag look around · Wheel zoom<br>E interact · G gather · F fly or fry your code<br>C Codify · M map · N metro · B builder<br>Enter chat · /help commands · Esc this screen</div>
+      <div class="th-pop" data-pop="more"><a data-go="map">Genesis City map</a><a data-go="metro">Multiverse Metro</a><a data-go="invite">Copy the invite link</a><a data-go="shot">Screenshot mode (Shift+U)</a></div>`;
+    document.body.appendChild(bar);
+    bar.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-act]');
+      const go = event.target.closest('[data-go]');
+      if (go) {
+        const what = go.dataset.go;
+        exit();
+        if (what === 'map') CityMap.toggle();
+        else if (what === 'metro') Metro.open();
+        else if (what === 'shot') document.body.classList.add('hide-ui');
+        else if (what === 'invite') navigator.clipboard?.writeText(location.href).then(() => appendSystemMessage('Invite link copied.')).catch(() => appendSystemMessage(location.href));
+        return;
+      }
+      if (!button) return;
+      const act = button.dataset.act;
+      if (act === 'full') exit();
+      else if (act === 'reload') location.reload();
+      else if (act === 'power') location.href = location.pathname + (lobbyId ? `?lobby=${lobbyId}` : '');
+      else {
+        const pop = bar.querySelector(`[data-pop="${act}"]`);
+        const open = !pop.classList.contains('open');
+        bar.querySelectorAll('.th-pop').forEach((other) => other.classList.remove('open'));
+        pop.classList.toggle('open', open);
+      }
+    });
+    renderer.domElement.addEventListener('pointerdown', (event) => { if (active) { event.stopImmediatePropagation(); exit(); } }, true);
+    window.addEventListener('resize', place);
+  }
+
+  // The bar sits right under the shrunken game
+  function place() {
+    if (!active) return;
+    const rect = renderer.domElement.getBoundingClientRect();
+    bar.style.top = `${Math.round(rect.bottom + 12)}px`;
+    bar.style.width = `${Math.round(rect.width)}px`;
+  }
+
+  function enter() {
+    if (!bar) build();
+    active = true;
+    keysPressed.clear();
+    const here = (document.getElementById('hud-world') || {}).textContent || '';
+    bar.querySelector('.th-name').textContent = `GITHUB MULTIVERSE ${window.Launcher && Launcher.currentVersion ? Launcher.currentVersion() : ''}`.trim();
+    bar.querySelector('.th-place').textContent = here;
+    bar.querySelectorAll('.th-pop').forEach((pop) => pop.classList.remove('open'));
+    document.body.classList.add('theater');
+    requestAnimationFrame(place);
+  }
+
+  function exit() {
+    active = false;
+    document.body.classList.remove('theater');
+  }
+
+  // Is anything open that Esc should close first (a panel, a dialog, a field)?
+  function somethingOpen() {
+    const focused = document.activeElement;
+    if (focused && (focused instanceof HTMLInputElement || focused instanceof HTMLTextAreaElement || focused.isContentEditable)) return true;
+    if (document.getElementById('launcher') || document.body.classList.contains('hide-ui')) return true;
+    if (Interactions.isBusy() || Codify.isOpen() || Metro.isOpen() || Metro.isRiding() || viewMode === 'map') return true;
+    const big = window.innerWidth * window.innerHeight * 0.18;
+    return [...document.body.querySelectorAll('body > *:not(canvas):not(script):not(style), body > * > *')].some((element) => {
+      if (element === bar || element === renderer.domElement || element.contains(renderer.domElement)) return false;
+      const style = getComputedStyle(element);
+      if (style.position !== 'fixed' && style.position !== 'absolute') return false;
+      if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0 || style.pointerEvents === 'none') return false;
+      const rect = element.getBoundingClientRect();
+      return rect.width * rect.height > big && (Number(style.zIndex) || 0) >= 20;
+    });
+  }
+
+  function init() {
+    // Capture phase: decided before any panel closes itself on the same Esc
+    window.addEventListener('keydown', (event) => {
+      if (active) {
+        if (event.key === 'Escape') exit();
+        event.stopImmediatePropagation();
+        event.preventDefault();
+        return;
+      }
+      if (event.key === 'Escape' && !event.repeat && worldEntered && !somethingOpen()) {
+        event.stopImmediatePropagation();
+        enter();
+      }
+    }, true);
+  }
+
+  return { init, enter, exit, isActive: () => active };
+})();
+let worldEntered = false;
+Theater.init();
+launched.then(() => { worldEntered = true; });
