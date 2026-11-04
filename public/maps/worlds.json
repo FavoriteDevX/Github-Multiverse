@@ -824,6 +824,7 @@
    -47
   ],
   "cardImage": "assets/squid-game-logo.jpg",
+  "photo": true,
   "world": true,
   "island": "bare"
  }
