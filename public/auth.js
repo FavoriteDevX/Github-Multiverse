@@ -480,3 +480,58 @@ const Launcher = (() => {
 
   return { open };
 })();
+
+// ============================================================================
+// LOGIN PANORAMA (MINECRAFT TITLE SCREEN STYLE)
+// ============================================================================
+// Behind the welcome card, screenshots of the worlds and districts drift
+// slowly and cross-fade one into the next, like the Minecraft title screen.
+// The shots are tiles of assets/places.jpg (8 x 8 tiles in worlds.json order).
+(() => {
+  const screen = document.getElementById('auth-screen');
+  if (!screen) return;
+  const TILES = [57, 41, 38, 0, 39, 15, 33, 23, 40, 8, 36, 1, 35, 46, 37, 16];
+  const SHOW_MS = 7000;
+  const style = document.createElement('style');
+  style.textContent = `
+    #auth-panorama { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; background: #0d1117; }
+    #auth-panorama div { position: absolute; left: 50%; top: 50%; width: max(130vw, 186vh); aspect-ratio: 320 / 224; opacity: 0; filter: blur(1.5px) saturate(1.1);
+      background-image: url(assets/places.jpg); background-size: 800% 800%; transition: opacity 2.4s ease-in-out; will-change: transform, opacity; }
+    #auth-panorama div.on { opacity: 1; }
+    #auth-panorama div.pan-a { animation: auth-pan-a 16s linear forwards; }
+    #auth-panorama div.pan-b { animation: auth-pan-b 16s linear forwards; }
+    @keyframes auth-pan-a { from { transform: translate(-53%, -50%) scale(1.02); } to { transform: translate(-47%, -51%) scale(1.1); } }
+    @keyframes auth-pan-b { from { transform: translate(-47%, -51%) scale(1.1); } to { transform: translate(-53%, -49%) scale(1.02); } }
+    #auth-panorama::after { content: ''; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(13, 17, 23, 0.3), rgba(13, 17, 23, 0.72)); }
+    @media (prefers-reduced-motion: reduce) { #auth-panorama div.pan-a, #auth-panorama div.pan-b { animation: none; transform: translate(-50%, -50%); } }
+    #auth-screen > :not(#auth-panorama) { position: relative; z-index: 1; }
+  `;
+  document.head.appendChild(style);
+  const panorama = document.createElement('div');
+  panorama.id = 'auth-panorama';
+  const slides = [document.createElement('div'), document.createElement('div')];
+  slides.forEach((slide) => panorama.appendChild(slide));
+  screen.prepend(panorama);
+  let turn = 0;
+  let timer = null;
+  function show() {
+    const slide = slides[turn % 2];
+    const other = slides[(turn + 1) % 2];
+    const tile = TILES[turn % TILES.length];
+    slide.style.backgroundPosition = `${((tile % 8) / 7) * 100}% ${(Math.floor(tile / 8) / 7) * 100}%`;
+    slide.className = '';
+    void slide.offsetWidth; // restart the drift animation
+    slide.className = `on ${turn % 2 ? 'pan-b' : 'pan-a'}`;
+    other.classList.remove('on');
+    turn += 1;
+  }
+  const atlas = new Image();
+  atlas.onload = () => {
+    show();
+    timer = setInterval(() => {
+      if (!document.body.contains(screen) || screen.classList.contains('leaving') || getComputedStyle(screen).display === 'none') { clearInterval(timer); return; }
+      show();
+    }, SHOW_MS);
+  };
+  atlas.src = 'assets/places.jpg';
+})();
