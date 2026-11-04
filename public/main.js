@@ -1696,8 +1696,20 @@ function setupNetwork(session) {
 // ============================================================================
 // RUNTIME LOOP
 // ============================================================================
+// While the welcome screen or the launcher covers the whole page the 3D world
+// is not drawn at all: those screens stay smooth and the districts finish
+// building sooner, instead of the GPU drawing frames nobody can see
+let coverScreens = null;
+function worldCovered() {
+  if (!coverScreens) coverScreens = { auth: document.getElementById('auth-screen') };
+  const auth = coverScreens.auth;
+  if (document.getElementById('launcher')) return true;
+  return Boolean(auth && auth.style.display !== 'none' && !auth.classList.contains('leaving'));
+}
+
 function animate() {
   requestAnimationFrame(animate);
+  if (worldCovered()) { clock.getDelta(); return; }
   const frameSeconds = Math.min(clock.getDelta(), 0.25);
   Quality.sample(frameSeconds);
   const deltaSeconds = Math.min(frameSeconds, 0.1);
@@ -1995,6 +2007,8 @@ loadUniverse()
 const universeReady = plazaReady.then(() => {
   const plaza = findPlace('plaza') || places[0];
   if (plaza) flyTo(placeLanding(plaza), null);
+  // Compile the plaza's shaders once, behind the launcher, so the first frame in the world does not stall
+  try { renderer.compile(scene, camera); } catch (error) { /* compiled on the first frame instead */ }
 });
 
 // After login the launcher (auth.js) opens; LAUNCH GAME or a card's play
@@ -2217,7 +2231,7 @@ const Theater = (() => {
     active = true;
     keysPressed.clear();
     const here = (document.getElementById('hud-world') || {}).textContent || '';
-    bar.querySelector('.th-name').textContent = `GITHUB MULTIVERSE ${window.Launcher && Launcher.currentVersion ? Launcher.currentVersion() : ''}`.trim();
+    bar.querySelector('.th-name').textContent = `GITHUB MULTIVERSE ${typeof Launcher !== 'undefined' && Launcher.currentVersion ? Launcher.currentVersion() : ''}`.trim();
     bar.querySelector('.th-place').textContent = here;
     bar.querySelectorAll('.th-pop').forEach((pop) => pop.classList.remove('open'));
     document.body.classList.add('theater');

@@ -340,7 +340,7 @@ const Launcher = (() => {
 
   function cardHtml(entry) {
     return `<div class="ln-card${state.selected === entry.key ? ' on' : ''}" data-key="${entry.key}">
-      <div class="ln-cover" style="${tileStyle(entry.tile ?? entry.key)}"><b>${esc(entry.title)}</b>${entry.date ? `<em>${esc(entry.date)}</em>` : ''}</div>
+      <div class="ln-cover" style="${tileStyle(entry.tile ?? entry.key)}"><b>${esc(entry.title)}</b>${entry.when ? `<em>${esc(entry.when)}</em>` : ''}</div>
       <div class="ln-card-foot"><span>${esc(entry.version)}</span><button class="ln-play" data-play="${entry.key}" title="Play ${esc(entry.title)}">&#9654;</button></div></div>`;
   }
 
@@ -351,7 +351,7 @@ const Launcher = (() => {
       const query = (state.query || '').toLowerCase();
       let list = tab === 'worlds'
         ? worlds.filter((world) => world.world).map((world, i) => ({ key: world.key, title: world.name, version: 'World', popular: i, date: i, text: world.description }))
-        : tab === 'home' ? VERSIONS.map((entry, i) => ({ ...entry, popular: VERSIONS.length - i, date: VERSIONS.length - i }))
+        : tab === 'home' ? VERSIONS.map((entry, i) => ({ ...entry, when: entry.date, popular: VERSIONS.length - i, date: VERSIONS.length - i }))
           : ENTRIES.concat(worlds.filter((world) => !world.world && world.key !== 'plaza' && world.photo).map((world, i) => ({ key: world.key, title: world.name, version: 'District', popular: 0, date: -i, text: world.description })));
       list = list.filter((entry) => !query || `${entry.title} ${entry.version} ${entry.text || ''}`.toLowerCase().includes(query));
       const sort = state.sort || 'popular';
