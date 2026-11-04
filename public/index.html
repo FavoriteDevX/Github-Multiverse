@@ -24,7 +24,7 @@
         ['pushState', 'replaceState'].forEach(function (name) {
           var original = history[name].bind(history);
           history[name] = function (state, title, url) {
-            if (url != null) { var target = new URL(String(url), document.baseURI); if (target.origin !== location.origin) url = location.pathname + location.search + target.hash; }
+            if (url != null) { var target = new URL(String(url), document.baseURI); url = target.origin === location.origin ? target.href : location.origin + location.pathname + location.search + target.hash; }
             return original(state, title, url);
           };
         });
