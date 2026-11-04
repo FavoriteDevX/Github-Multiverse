@@ -312,3 +312,6 @@ Rest in peace, corporate metaverse. The open-source community takes it from here
 
 ## ⚖️ Disclaimer
 Company names and structures are stylized wordmark recreations for identification purposes. Keynotes are streamed directly from official Apple/Google YouTube embeds. All trademarks belong to their respective owners.
+---
+<p align="center" dir="auto">
+  Made with ❤️ for the GitHub community </p>
