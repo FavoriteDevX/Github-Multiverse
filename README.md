@@ -292,6 +292,10 @@ This project is proudly supported and built in collaboration with:
 - Apple Official
 - Decentraland.org
 
+And also thanks all my contributors!
+
+<img width="282" height="122" alt="image" src="https://github.com/user-attachments/assets/664c860d-b599-40cb-b432-c8a7cbbcbce5" />
+
 ---
 
 ## Also rip Zuckerberg's metaverse lol
