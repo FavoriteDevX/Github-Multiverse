@@ -292,6 +292,10 @@ This project is proudly supported and built in collaboration with:
 - Apple Official
 - Decentraland.org
 
+And also thanks all my contributors!
+
+<img width="282" height="122" alt="image" src="https://github.com/user-attachments/assets/664c860d-b599-40cb-b432-c8a7cbbcbce5" />
+
 ---
 
 ## Also rip Zuckerberg's metaverse lol
@@ -312,3 +316,6 @@ Rest in peace, corporate metaverse. The open-source community takes it from here
 
 ## ⚖️ Disclaimer
 Company names and structures are stylized wordmark recreations for identification purposes. Keynotes are streamed directly from official Apple/Google YouTube embeds. All trademarks belong to their respective owners.
+---
+<p align="center" dir="auto">
+  Made with ❤️ for the GitHub community </p>
