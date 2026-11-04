@@ -20,6 +20,14 @@
         var fix = function (url) { return typeof url === 'string' && url.charAt(0) === '/' && url.charAt(1) !== '/' ? cfg.origin + url : url; };
         var nativeFetch = window.fetch.bind(window);
         window.fetch = function (input, init) { return nativeFetch(fix(input), init); };
+        // Old builds update the URL hash (#place); keep it on this page, not on the CDN base
+        ['pushState', 'replaceState'].forEach(function (name) {
+          var original = history[name].bind(history);
+          history[name] = function (state, title, url) {
+            if (url != null) { var target = new URL(String(url), document.baseURI); if (target.origin !== location.origin) url = location.pathname + location.search + target.hash; }
+            return original(state, title, url);
+          };
+        });
         var open = XMLHttpRequest.prototype.open;
         XMLHttpRequest.prototype.open = function (method, url) { arguments[1] = fix(url); return open.apply(this, arguments); };
         ['getItem', 'setItem', 'removeItem'].forEach(function (name) {
