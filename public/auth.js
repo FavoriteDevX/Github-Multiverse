@@ -351,7 +351,8 @@ const Launcher = (() => {
       const query = (state.query || '').toLowerCase();
       let list = tab === 'worlds'
         ? worlds.filter((world) => world.world).map((world, i) => ({ key: world.key, title: world.name, version: 'World', popular: i, date: i, text: world.description }))
-        : tab === 'home' ? VERSIONS.map((entry, i) => ({ ...entry, popular: VERSIONS.length - i, date: VERSIONS.length - i })) : ENTRIES.slice();
+        : tab === 'home' ? VERSIONS.map((entry, i) => ({ ...entry, popular: VERSIONS.length - i, date: VERSIONS.length - i }))
+          : ENTRIES.concat(worlds.filter((world) => !world.world && world.key !== 'plaza' && world.photo).map((world, i) => ({ key: world.key, title: world.name, version: 'District', popular: 0, date: -i, text: world.description })));
       list = list.filter((entry) => !query || `${entry.title} ${entry.version} ${entry.text || ''}`.toLowerCase().includes(query));
       const sort = state.sort || 'popular';
       list.sort((a, b) => (sort === 'az' ? a.title.localeCompare(b.title) : sort === 'newest' ? b.date - a.date : b.popular - a.popular));
