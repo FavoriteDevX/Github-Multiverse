@@ -4,6 +4,56 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>GitHub Multiverse</title>
+  <script>
+    // Classic versions: ?v=<commit> plays that build of the game, loaded from the
+    // repository history (jsDelivr serves any commit of the public repo). Absolute
+    // paths (/api, /socket.io) still go to this server, images load with CORS so
+    // WebGL can use them, and the old build gets its own localStorage namespace.
+    (function () {
+      var params = new URLSearchParams(location.search);
+      var version = params.get('v');
+      if (!version || !/^[0-9a-f]{7,40}$/.test(version)) return;
+      var local = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+      var base = ((local && params.get('cdn')) || 'https://cdn.jsdelivr.net/gh/FavoriteDevX/Github-Universe@') + version + '/public/';
+      var origin = location.origin;
+      function shim(cfg) {
+        var fix = function (url) { return typeof url === 'string' && url.charAt(0) === '/' && url.charAt(1) !== '/' ? cfg.origin + url : url; };
+        var nativeFetch = window.fetch.bind(window);
+        window.fetch = function (input, init) { return nativeFetch(fix(input), init); };
+        var open = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function (method, url) { arguments[1] = fix(url); return open.apply(this, arguments); };
+        ['getItem', 'setItem', 'removeItem'].forEach(function (name) {
+          var original = Storage.prototype[name];
+          Storage.prototype[name] = function (key) { var args = Array.prototype.slice.call(arguments); args[0] = 'classic-' + cfg.version + ':' + key; return original.apply(this, args); };
+        });
+        var src = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
+        Object.defineProperty(HTMLImageElement.prototype, 'src', { configurable: true, get: src.get, set: function (value) { if (this.crossOrigin === null) this.crossOrigin = 'anonymous'; src.set.call(this, value); } });
+        document.addEventListener('DOMContentLoaded', function () {
+          var back = document.createElement('a');
+          back.href = cfg.origin + '/';
+          back.textContent = 'Classic version ' + cfg.label + ' · back to the launcher';
+          back.setAttribute('style', 'position:fixed;right:10px;bottom:10px;z-index:2147483647;padding:5px 10px;opacity:0.85;border-radius:12px;background:rgba(15,17,21,0.85);color:#fff;font:600 12px Inter,Segoe UI,Arial,sans-serif;text-decoration:none;border:1px solid rgba(255,255,255,0.15)');
+          document.body.appendChild(back);
+        });
+      }
+      document.write('<plaintext style="display:none">');
+      fetch(base + 'index.html').then(function (response) {
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        return response.text();
+      }).then(function (html) {
+        var cfg = JSON.stringify({ origin: origin, version: version, label: params.get('label') || version.slice(0, 7) }).replace(/</g, '\\u003c');
+        html = html.replace(/(src|href)="\/(?!\/)/g, '$1="' + origin + '/');
+        html = html.replace(/<head[^>]*>/i, function (tag) { return tag + '<base href="' + base + '"><script>(' + shim.toString() + ')(' + cfg + ');<\/script>'; });
+        document.open();
+        document.write(html);
+        document.close();
+      }).catch(function (error) {
+        document.open();
+        document.write('<body style="margin:0;display:grid;place-items:center;height:100vh;background:#0f1115;color:#e9ecef;font:15px Segoe UI,Arial,sans-serif"><div style="text-align:center"><h2>This classic version could not be loaded</h2><p style="color:#8b949e">' + String(error.message).replace(/</g, '&lt;') + '</p><a href="/" style="color:#3fb950">Back to the launcher</a></div></body>');
+        document.close();
+      });
+    })();
+  </script>
   <link rel="icon" type="image/png" href="assets/icon.png">
   <style>
     :root {

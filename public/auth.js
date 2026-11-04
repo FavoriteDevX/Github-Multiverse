@@ -206,8 +206,24 @@ const Auth = (() => {
 // launch panel on the right. "LAUNCH GAME" or a card's play button enters the
 // world at that spot. The daily bonus (+50 MVC every 20 hours) can be claimed
 // here. Card covers come from the place screenshots in assets/places.jpg.
+// The Home tab lists the versions of the game, from the first walkable
+// universe to the current one: an older version plays its own build, loaded
+// from the repository history (see the ?v= loader in index.html).
 const Launcher = (() => {
-  const ATLAS = { columns: 8, rows: 6, extra: { underground: 46 } };
+  const ATLAS = { columns: 8, rows: 8, extra: { underground: 46 } };
+  // Versions: commit = the build to load (null = this one); tile = its screenshot in the atlas
+  const VERSIONS = [
+    { key: 'v10', version: 'v10', commit: null, tile: 57, date: 'Nov 2, 2026', title: 'Squid Game World & Launcher', text: 'Squid Game Epic Edition becomes its own world on a bare concrete island, resources to gather (E or G, hold G to pull them in, /bag), working Mac demos in the House of MAC and this launcher with the daily bonus.' },
+    { key: 'v9', version: 'v9', commit: 'fc82b3e', tile: 56, date: 'Oct 24, 2026', title: 'Realistic Surfaces & Scene Builder', text: 'Detailed stone, brick, wood, glass and water with relief, grass back across Genesis City, JUMP IN cards with real screenshots and Decentraland-style scenes built in game with B.' },
+    { key: 'v8', version: 'v8', commit: '1a0289d', tile: 55, date: 'Oct 20, 2026', title: 'Night Soundtrack & House of MAC', text: 'A night coding playlist, the Developers Daily Life museum, the underground lounge lit by the pool, firelight at the firepits, a colored Codify editor and the House of MAC billboards and reel.' },
+    { key: 'v7', version: 'v7', commit: '73e0b86', tile: 54, date: 'Oct 17, 2026', title: 'Lounge, Forests & Leafy Trees', text: 'Bigger districts, the beach on the West Sea shore, the underground lounge and Gig Plaza, the forest chalet hotel, silent session resume and realistic leafy trees.' },
+    { key: 'v6', version: 'v6', commit: '895ce5a', tile: 53, date: 'Oct 16, 2026', title: 'MVC Token, Live Events & Glass Cube', text: 'Seas and islands around the city, new districts, the MVC token on testnet, live community events and The Glass Cube with the Underground Tech Hub.' },
+    { key: 'v5', version: 'v5', commit: '7666562', tile: 52, date: 'Oct 14, 2026', title: 'Code Chests & Land Parcels', text: 'Chests drop real code files, cursor wearables, the Underground Cafe menu, the museum timeline and a Decentraland-style city of land parcels.' },
+    { key: 'v4', version: 'v4', commit: '95e8bec', tile: 51, date: 'Oct 12, 2026', title: 'Codify & Fry your Code', text: 'Write code right in the world with Codify, fry your bugs at the firepit, sleep in hotels, earn MVC and enjoy a cleaner HUD.' },
+    { key: 'v3', version: 'v3', commit: 'd2fe76c', tile: 50, date: 'Oct 12, 2026', title: 'Underground, Metro & Tower of Icons', text: 'An organic Genesis City, the underground plaza below the pool, the Multiverse Metro to every district and the Tower of Icons.' },
+    { key: 'v2', version: 'v2', commit: 'f1ba4a4', tile: 49, date: 'Oct 11, 2026', title: 'Genesis Plaza & Real Logos', text: 'Accounts and a welcome screen, dev loot chests, the Genesis City spawn, separate Worlds, real brand logos and HQs you can walk into.' },
+    { key: 'v1', version: 'v1', commit: '013e991', tile: 48, date: 'Oct 11, 2026', title: 'The First Walkable Universe', text: 'Where it all began: GitVerse turns into a walkable Decentraland-style universe with Genesis Plaza, districts, chat commands and multiplayer cursors.' }
+  ];
   const ENTRIES = [
     { key: 'plaza', title: 'Genesis Plaza', version: '26.3', popular: 4, date: 4, text: 'The heart of the Multiverse: Welcome Hall, Theatre, Events Wall, the firepit and the pool down to the Underground.' },
     { key: 'gamer', title: 'Gamer District', version: '26.2', popular: 3, date: 3, text: 'The Gravity Flip tower, arcades, a LAN party and the mini-game arena.' },
@@ -226,9 +242,9 @@ const Launcher = (() => {
 
   const esc = (text) => String(text).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   function tileStyle(key) {
-    const index = key in ATLAS.extra ? ATLAS.extra[key] : worlds.findIndex((world) => world.key === key);
+    const index = typeof key === 'number' ? key : key in ATLAS.extra ? ATLAS.extra[key] : worlds.findIndex((world) => world.key === key);
     const world = worlds[index];
-    if (index < 0 || (world && !world.photo && !(key in ATLAS.extra))) return world && world.cardImage ? `background-image:url(${world.cardImage});background-size:cover;background-position:center` : 'background:linear-gradient(135deg,#1f6feb,#8957e5)';
+    if (index < 0 || (typeof key !== 'number' && world && !world.photo && !(key in ATLAS.extra))) return world && world.cardImage ? `background-image:url(${world.cardImage});background-size:cover;background-position:center` : 'background:linear-gradient(135deg,#1f6feb,#8957e5)';
     const col = index % ATLAS.columns;
     const row = Math.floor(index / ATLAS.columns);
     return `background-image:url(assets/places.jpg);background-size:${ATLAS.columns * 100}% ${ATLAS.rows * 100}%;background-position:${(col / (ATLAS.columns - 1)) * 100}% ${(row / (ATLAS.rows - 1)) * 100}%`;
@@ -269,6 +285,7 @@ const Launcher = (() => {
       #launcher .ln-card.on .ln-cover { border-color: #3fb950; box-shadow: 0 0 0 2px rgba(63,185,80,0.25), 0 10px 30px rgba(0,0,0,0.35); }
       #launcher .ln-cover::after { content: ''; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,0.05) 40%, rgba(0,0,0,0.65) 100%); }
       #launcher .ln-cover b { position: absolute; left: 12px; right: 12px; top: 12px; z-index: 1; font: 11px/1.5 "Press Start 2P", monospace; color: #fff; text-shadow: 0 2px 0 #000, 0 0 8px rgba(0,0,0,0.8); }
+      #launcher .ln-cover em { position: absolute; left: 12px; bottom: 10px; z-index: 1; font: 600 11px Inter, sans-serif; font-style: normal; color: #ced4da; }
       #launcher .ln-card-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
       #launcher .ln-card-foot span { font: 12px "Press Start 2P", monospace; color: #fff; }
       #launcher .ln-play { width: 34px; height: 34px; border-radius: 50%; border: 0; background: #2ea043; color: #fff; font-size: 13px; cursor: pointer; box-shadow: 0 0 0 4px rgba(46,160,67,0.18); }
@@ -323,7 +340,7 @@ const Launcher = (() => {
 
   function cardHtml(entry) {
     return `<div class="ln-card${state.selected === entry.key ? ' on' : ''}" data-key="${entry.key}">
-      <div class="ln-cover" style="${tileStyle(entry.tile || entry.key)}"><b>${esc(entry.title)}</b></div>
+      <div class="ln-cover" style="${tileStyle(entry.tile ?? entry.key)}"><b>${esc(entry.title)}</b>${entry.date ? `<em>${esc(entry.date)}</em>` : ''}</div>
       <div class="ln-card-foot"><span>${esc(entry.version)}</span><button class="ln-play" data-play="${entry.key}" title="Play ${esc(entry.title)}">&#9654;</button></div></div>`;
   }
 
@@ -333,12 +350,13 @@ const Launcher = (() => {
     if (tab === 'home' || tab === 'play' || tab === 'worlds') {
       const query = (state.query || '').toLowerCase();
       let list = tab === 'worlds'
-        ? worlds.filter((world) => world.key !== 'plaza').map((world, i) => ({ key: world.key, title: world.name, version: world.world ? 'World' : 'District', popular: world.world ? 2 : 1, date: i, text: world.description }))
-        : ENTRIES.slice();
-      list = list.filter((entry) => !query || `${entry.title} ${entry.version}`.toLowerCase().includes(query));
+        ? worlds.filter((world) => world.world).map((world, i) => ({ key: world.key, title: world.name, version: 'World', popular: i, date: i, text: world.description }))
+        : tab === 'home' ? VERSIONS.map((entry, i) => ({ ...entry, popular: VERSIONS.length - i, date: VERSIONS.length - i }))
+          : ENTRIES.concat(worlds.filter((world) => !world.world && world.key !== 'plaza' && world.photo).map((world, i) => ({ key: world.key, title: world.name, version: 'District', popular: 0, date: -i, text: world.description })));
+      list = list.filter((entry) => !query || `${entry.title} ${entry.version} ${entry.text || ''}`.toLowerCase().includes(query));
       const sort = state.sort || 'popular';
       list.sort((a, b) => (sort === 'az' ? a.title.localeCompare(b.title) : sort === 'newest' ? b.date - a.date : b.popular - a.popular));
-      left.innerHTML = `<div class="ln-tools"><input class="ln-search" placeholder="Search versions..." value="${esc(state.query || '')}"/>
+      left.innerHTML = `<div class="ln-tools"><input class="ln-search" placeholder="${tab === 'worlds' ? 'Search worlds...' : tab === 'home' ? 'Search versions and updates...' : 'Search starting points...'}" value="${esc(state.query || '')}"/>
         <select class="ln-sort"><option value="popular"${sort === 'popular' ? ' selected' : ''}>Popular</option><option value="newest"${sort === 'newest' ? ' selected' : ''}>Newest</option><option value="az"${sort === 'az' ? ' selected' : ''}>A-Z</option></select></div>
         <div class="ln-grid">${list.map(cardHtml).join('') || '<p style="color:#8b949e">Nothing found.</p>'}</div>`;
       const search = left.querySelector('.ln-search');
@@ -370,14 +388,25 @@ const Launcher = (() => {
 
   function select(key) {
     state.selected = key;
-    const entry = ENTRIES.find((item) => item.key === key) || (() => { const world = worlds.find((item) => item.key === key); return world && { key, title: world.name, text: world.description }; })() || ENTRIES[0];
-    state.root.querySelector('.ln-hero').setAttribute('style', tileStyle(entry.tile || entry.key));
-    state.root.querySelector('.ln-entry').textContent = `Starting point: ${entry.title}`;
+    const entry = VERSIONS.find((item) => item.key === key) || ENTRIES.find((item) => item.key === key) || (() => { const world = worlds.find((item) => item.key === key); return world && { key, title: world.name, text: world.description }; })() || ENTRIES[0];
+    const version = entry.commit !== undefined ? entry : VERSIONS[0];
+    state.root.querySelector('.ln-hero').setAttribute('style', tileStyle(entry.tile ?? entry.key));
+    state.root.querySelector('.ln-title h2').textContent = `GITHUB MULTIVERSE ${version.version}`;
+    state.root.querySelector('.ln-desc').textContent = entry.commit !== undefined ? `${entry.title}. ${entry.text}` : entry.text || '';
+    state.root.querySelector('.ln-entry').textContent = entry.commit ? `Classic version from ${entry.date}: plays that build as it was (solo world, progress kept apart)` : entry.commit === null ? `Latest version · ${entry.date}` : `Starting point: ${entry.title}`;
     state.root.querySelectorAll('.ln-card').forEach((card) => card.classList.toggle('on', card.dataset.key === key));
   }
 
   function launch(key) {
-    const target = key || state.selected || 'plaza';
+    let target = key || state.selected || 'plaza';
+    const version = VERSIONS.find((item) => item.key === target);
+    if (version && version.commit) {
+      const here = new URLSearchParams(location.search);
+      const cdn = here.get('cdn') ? `&cdn=${encodeURIComponent(here.get('cdn'))}` : '';
+      location.href = `/?v=${version.commit}&label=${version.version}${cdn}`;
+      return;
+    }
+    if (version) target = 'plaza';
     if (target === 'private' && !new URLSearchParams(location.search).get('lobby')) {
       const id = Math.random().toString(36).slice(2, 8);
       location.search = `?lobby=${id}`;
@@ -401,11 +430,11 @@ const Launcher = (() => {
       root.id = 'launcher';
       root.innerHTML = `
         <header class="ln-top"><div class="ln-logo"><img src="assets/logo.png" alt="GitHub Multiverse"/></div>
-          <nav>${[['home', 'Home'], ['play', 'Play'], ['servers', 'Servers'], ['worlds', 'Worlds'], ['packs', 'Resource Packs'], ['news', 'News']].map(([key, name]) => `<button data-tab="${key}"${key === 'play' ? ' class="on"' : ''}>${name}</button>`).join('')}</nav>
+          <nav>${[['home', 'Home'], ['play', 'Play'], ['servers', 'Servers'], ['worlds', 'Worlds'], ['packs', 'Resource Packs'], ['news', 'News']].map(([key, name]) => `<button data-tab="${key}"${key === 'home' ? ' class="on"' : ''}>${name}</button>`).join('')}</nav>
           <div class="ln-right"><span class="ln-user">${esc(session.username)}</span><span class="ln-coins">... MVC</span><button class="ln-daily" type="button">Claim daily bonus (+50 MVC)</button></div></header>
         <main class="ln-main"><section class="ln-left"></section>
           <aside class="ln-panel"><div class="ln-hero"></div>
-            <div class="ln-title"><i></i><h2>GITHUB MULTIVERSE v1.0</h2></div>
+            <div class="ln-title"><i></i><h2>GITHUB MULTIVERSE v10</h2></div>
             <p class="ln-desc">The developers' metaverse in your browser: walk Genesis City as a 3D cursor, code with Codify, fry your bugs at the firepits, buy land and build scenes, and jump into worlds like Silicon Valley and Squid Game Epic Edition.</p>
             <div class="ln-launch-row"><button class="ln-launch" type="button">&#9654; LAUNCH GAME</button><button class="ln-gear" type="button" title="Settings">&#9881;</button></div>
             <div class="ln-settings"><label>Graphics <select class="ln-quality"><option value="auto">Auto</option><option value="minimum">Minimum</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
@@ -413,14 +442,15 @@ const Launcher = (() => {
             <p class="ln-entry"></p></aside></main>
         <div class="ln-toast"></div>`;
       document.body.appendChild(root);
-      state = { root, session, ready, resolve, tab: 'play', selected: 'plaza', coins: Auth.hasServer ? 0 : null, nextDailyAt: 0 };
+      state = { root, session, ready, resolve, tab: 'home', selected: 'v10', coins: Auth.hasServer ? 0 : null, nextDailyAt: 0 };
       renderLeft();
-      select('plaza');
+      select('v10');
       renderWallet();
       root.querySelectorAll('nav button').forEach((button) => button.addEventListener('click', () => {
         state.tab = button.dataset.tab;
         root.querySelectorAll('nav button').forEach((other) => other.classList.toggle('on', other === button));
         renderLeft();
+        if (['home', 'play', 'worlds'].includes(state.tab) && state.visible && state.visible.length) select(state.visible[0].key);
       }));
       root.querySelector('.ln-launch').addEventListener('click', () => launch());
       // Settings (gear): graphics quality, sound, sign out
@@ -448,5 +478,60 @@ const Launcher = (() => {
     });
   }
 
-  return { open };
+  return { open, currentVersion: () => VERSIONS[0].version };
+})();
+
+// ============================================================================
+// LOGIN PANORAMA (MINECRAFT TITLE SCREEN STYLE)
+// ============================================================================
+// Behind the welcome card, screenshots of the worlds and districts drift
+// slowly and cross-fade one into the next, like the Minecraft title screen.
+// The shots are tiles of assets/places.jpg (8 x 8 tiles in worlds.json order).
+(() => {
+  const screen = document.getElementById('auth-screen');
+  if (!screen) return;
+  const TILES = [57, 41, 38, 0, 39, 15, 33, 23, 40, 8, 36, 1, 35, 46, 37, 16];
+  const SHOW_MS = 7000;
+  const style = document.createElement('style');
+  style.textContent = `
+    #auth-panorama { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; background: #0d1117; }
+    #auth-panorama div { position: absolute; left: 50%; top: 50%; width: max(130vw, 186vh); aspect-ratio: 320 / 224; opacity: 0; filter: blur(1.5px) saturate(1.1);
+      background-image: url(assets/places.jpg); background-size: 800% 800%; transition: opacity 2.4s ease-in-out; will-change: transform, opacity; }
+    #auth-panorama div.on { opacity: 1; }
+    #auth-panorama div.pan-a { animation: auth-pan-a 16s linear forwards; }
+    #auth-panorama div.pan-b { animation: auth-pan-b 16s linear forwards; }
+    @keyframes auth-pan-a { from { transform: translate(-53%, -50%) scale(1.02); } to { transform: translate(-47%, -51%) scale(1.1); } }
+    @keyframes auth-pan-b { from { transform: translate(-47%, -51%) scale(1.1); } to { transform: translate(-53%, -49%) scale(1.02); } }
+    #auth-panorama::after { content: ''; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(13, 17, 23, 0.3), rgba(13, 17, 23, 0.72)); }
+    @media (prefers-reduced-motion: reduce) { #auth-panorama div.pan-a, #auth-panorama div.pan-b { animation: none; transform: translate(-50%, -50%); } }
+    #auth-screen > :not(#auth-panorama) { position: relative; z-index: 1; }
+  `;
+  document.head.appendChild(style);
+  const panorama = document.createElement('div');
+  panorama.id = 'auth-panorama';
+  const slides = [document.createElement('div'), document.createElement('div')];
+  slides.forEach((slide) => panorama.appendChild(slide));
+  screen.prepend(panorama);
+  let turn = 0;
+  let timer = null;
+  function show() {
+    const slide = slides[turn % 2];
+    const other = slides[(turn + 1) % 2];
+    const tile = TILES[turn % TILES.length];
+    slide.style.backgroundPosition = `${((tile % 8) / 7) * 100}% ${(Math.floor(tile / 8) / 7) * 100}%`;
+    slide.className = '';
+    void slide.offsetWidth; // restart the drift animation
+    slide.className = `on ${turn % 2 ? 'pan-b' : 'pan-a'}`;
+    other.classList.remove('on');
+    turn += 1;
+  }
+  const atlas = new Image();
+  atlas.onload = () => {
+    show();
+    timer = setInterval(() => {
+      if (!document.body.contains(screen) || screen.classList.contains('leaving') || getComputedStyle(screen).display === 'none') { clearInterval(timer); return; }
+      show();
+    }, SHOW_MS);
+  };
+  atlas.src = 'assets/places.jpg';
 })();
