@@ -1,0 +1,58 @@
+name: Open release discussions
+
+# When release notes land in .github/discussions/, open one discussion per
+# category of the repository (Q&A excluded). Each category takes the file named
+# after it (announcements.md, general.md, ideas.md, show-and-tell.md, polls.md);
+# any other category takes other.md. The first line "# Title" is the title.
+# A discussion whose title already exists in that category is not opened twice.
+on:
+  push:
+    branches: [main]
+    paths: ['.github/discussions/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  discussions: write
+
+jobs:
+  open:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const dir = '.github/discussions';
+            const { owner, repo } = context.repo;
+            const data = await github.graphql(`query($owner: String!, $repo: String!) {
+              repository(owner: $owner, name: $repo) {
+                id hasDiscussionsEnabled
+                discussionCategories(first: 25) { nodes { id name slug isAnswerable } }
+                discussions(first: 100, orderBy: { field: CREATED_AT, direction: DESC }) { nodes { title category { id } } }
+              }
+            }`, { owner, repo });
+            const repository = data.repository;
+            if (!repository.hasDiscussionsEnabled) { core.setFailed('Discussions are not enabled on this repository (Settings > General > Features > Discussions).'); return; }
+            const read = (name) => { const file = path.join(dir, name); return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null; };
+            const failures = [];
+            for (const category of repository.discussionCategories.nodes) {
+              if (category.isAnswerable || /q\s*&\s*a|q-a/i.test(category.name + ' ' + category.slug)) { core.info(`Skipping ${category.name} (Q&A)`); continue; }
+              const text = read(`${category.slug}.md`) || read('other.md');
+              if (!text) { core.info(`No notes for ${category.name}`); continue; }
+              const lines = text.split('\n');
+              const title = lines[0].replace(/^#\s*/, '').trim();
+              const body = lines.slice(1).join('\n').trim();
+              if (repository.discussions.nodes.some((d) => d.title === title && d.category.id === category.id)) { core.info(`Already open in ${category.name}: ${title}`); continue; }
+              try {
+                const created = await github.graphql(`mutation($repositoryId: ID!, $categoryId: ID!, $title: String!, $body: String!) {
+                  createDiscussion(input: { repositoryId: $repositoryId, categoryId: $categoryId, title: $title, body: $body }) { discussion { url } }
+                }`, { repositoryId: repository.id, categoryId: category.id, title, body });
+                core.info(`${category.name}: ${created.createDiscussion.discussion.url}`);
+              } catch (error) {
+                failures.push(`${category.name}: ${error.message}`);
+              }
+            }
+            if (failures.length) core.setFailed(`Could not open: ${failures.join(' | ')}`);
