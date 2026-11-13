@@ -14,7 +14,7 @@
       var version = params.get('v');
       if (!version || !/^[0-9a-f]{7,40}$/.test(version)) return;
       var local = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
-      var base = ((local && params.get('cdn')) || 'https://cdn.jsdelivr.net/gh/FavoriteDevX/Github-Universe@') + version + '/public/';
+      var base = ((local && params.get('cdn')) || 'https://cdn.jsdelivr.net/gh/FavoriteDevX/Github-Multiverse@') + version + '/public/';
       var origin = location.origin;
       function shim(cfg) {
         var fix = function (url) { return typeof url === 'string' && url.charAt(0) === '/' && url.charAt(1) !== '/' ? cfg.origin + url : url; };
