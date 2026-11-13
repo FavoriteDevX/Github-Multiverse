@@ -28,6 +28,8 @@ const City = (() => {
   let scene;
   let sky;
   let sun;
+  let lastSunAnchor = null;
+  let sunMoved = true;
   let hemisphere;
   let stars;
   let moon;
@@ -1347,6 +1349,7 @@ const City = (() => {
     sun.shadow.bias = -0.0004;
     sun.shadow.normalBias = 0.06;
     scene.add(sun, sun.target);
+    lastSunAnchor = new THREE.Vector3(Infinity, 0, Infinity);
 
     const starPositions = [];
     const random = seededRandom(7);
@@ -1424,6 +1427,9 @@ const City = (() => {
     scene.fog.color.copy(colors.bottom);
     scene.fog.near = weather === 'clear' ? 140 : 60;
     scene.fog.far = weather === 'clear' ? 900 : 380;
+    // Lighter quality levels see less far (the fog closes in, and everything
+    // behind it is not drawn at all): the biggest saving per frame
+    if (window.MULTIVERSE_VIEW_CAP) scene.fog.far = Math.min(scene.fog.far, window.MULTIVERSE_VIEW_CAP);
     // The higher you fly, the hazier the view; inside the cloud layer it turns white
     if (!cloudLayer) buildCloudLayer();
     updateCloudLayer(camera, time);
@@ -1451,8 +1457,14 @@ const City = (() => {
     sun.intensity = isDay ? daylight * 0.85 : 0.12;
     sun.color.set(isDay ? '#fff4e0' : '#9db4ff');
     const lightDirection = new THREE.Vector3(Math.cos(sunAngle) * 120, Math.abs(Math.sin(sunAngle)) * 160 + 30, 60);
-    sun.position.copy(focus).add(lightDirection);
-    sun.target.position.copy(focus);
+    // The sun follows the player in 10 m steps, so its shadow map only needs
+    // redrawing when that step changes (or every few frames for moving things)
+    const anchorX = Math.round(focus.x / 10) * 10;
+    const anchorZ = Math.round(focus.z / 10) * 10;
+    sunMoved = anchorX !== lastSunAnchor.x || anchorZ !== lastSunAnchor.z || Math.abs(focus.y - lastSunAnchor.y) > 3;
+    if (sunMoved) lastSunAnchor.set(anchorX, focus.y, anchorZ);
+    sun.position.copy(lastSunAnchor).add(lightDirection);
+    sun.target.position.copy(lastSunAnchor);
 
     const night = 1 - Math.min(1, colors.light / 0.5);
     stars.material.opacity = weather === 'clear' ? Math.max(0, night) : 0;
@@ -1480,7 +1492,7 @@ const City = (() => {
       positions.needsUpdate = true;
     });
     animatedCity.forEach((update) => update(time));
-    return { flash: weather === 'thunder' && Math.random() < 0.004, haze, inCloud };
+    return { flash: weather === 'thunder' && Math.random() < 0.004, haze, inCloud, sunMoved };
   }
 
   function init(targetScene) {

@@ -197,103 +197,59 @@ const Auth = (() => {
 })();
 
 // ============================================================================
-// LAUNCHER: THE DASHBOARD AFTER LOGIN (EAGLERCRAFT / DECENTRALAND STYLE)
+// LAUNCHER: A MINECRAFT-STYLE TITLE SCREEN AFTER LOGIN
 // ============================================================================
-// After signing in, the dev lands on a launcher instead of straight in the
-// world: a top bar (logo, Home / Play / Servers / Worlds / Resource Packs /
-// News, the username and the MVC balance), a grid of entry points on the left
-// (Genesis Plaza, Gamer District, Underground Cafe, Private Lobby) and the big
-// launch panel on the right. "LAUNCH GAME" or a card's play button enters the
-// world at that spot. The daily bonus (+50 MVC every 20 hours) can be claimed
-// here. Card covers come from the place screenshots in assets/places.jpg.
+// After signing in, the dev sees a title screen like Minecraft's: the logo
+// over a slowly moving panorama of the worlds, a yellow splash text and big
+// buttons (Join Genesis City, Worlds, Private Lobby, Options). Join shows a
+// "Joining world" screen with a progress bar until the world is ready.
+// Launcher.open(session, ready) resolves with { session, entry }.
 const Launcher = (() => {
-  const ATLAS = { columns: 8, rows: 8, extra: { underground: 46 } };
-  const ENTRIES = [
-    { key: 'plaza', title: 'Genesis Plaza', version: '26.3', popular: 4, date: 4, text: 'The heart of the Multiverse: Welcome Hall, Theatre, Events Wall, the firepit and the pool down to the Underground.' },
-    { key: 'gamer', title: 'Gamer District', version: '26.2', popular: 3, date: 3, text: 'The Gravity Flip tower, arcades, a LAN party and the mini-game arena.' },
-    { key: 'underground', title: 'Underground Cafe', version: '26.1', popular: 2, date: 2, text: 'Start below Genesis Plaza: the lounge, the cafe menu and the Hall of Internet & Software History.' },
-    { key: 'private', title: 'Private Lobby', version: 'Invite only', tile: 'lobby', popular: 1, date: 1, text: 'A new instance only the devs you invite can see. Share the link from the top bar once inside.' }
-  ];
-  const NEWS = [
-    ['Squid Game Epic Edition', 'A new world: Red Build Green Build, the Glass Bridge of Code Review and more. Nobody gets hurt, builds just fail.'],
-    ['Build your own scene', 'Buy a parcel and press B: Decentraland-style Builder with per-parcel limits, publish for everyone.'],
-    ['Gather resources', 'Code Crystals, Coffee Beans, RAM and Git Gems around Genesis City: E or G to pick up, hold G to gather.'],
-    ['House of MAC demo Macs', 'Try a working macOS-style desktop on the Avenue tables: Finder, Terminal, Notes, Calculator.'],
-    ['Realistic surfaces', 'Stone, brick, wood, glass and water got detailed textures with relief.']
-  ];
+  const SPLASHES = ['Now with 100% more cursors!', 'git push --force-with-love', 'Works on my machine!', 'Ship it!', 'Also try Squid Game Epic Edition!', 'Merge conflicts not included!', 'Made by devs, for devs!', 'Commit early, commit often!'];
   let worlds = [];
   let state = null;
-
   const esc = (text) => String(text).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  function tileStyle(key) {
-    const index = key in ATLAS.extra ? ATLAS.extra[key] : worlds.findIndex((world) => world.key === key);
-    const world = worlds[index];
-    if (index < 0 || (world && !world.photo && !(key in ATLAS.extra))) return world && world.cardImage ? `background-image:url(${world.cardImage});background-size:cover;background-position:center` : 'background:linear-gradient(135deg,#1f6feb,#8957e5)';
-    const col = index % ATLAS.columns;
-    const row = Math.floor(index / ATLAS.columns);
-    return `background-image:url(assets/places.jpg);background-size:${ATLAS.columns * 100}% ${ATLAS.rows * 100}%;background-position:${(col / (ATLAS.columns - 1)) * 100}% ${(row / (ATLAS.rows - 1)) * 100}%`;
+  function tile(key) {
+    const index = worlds.findIndex((world) => world.key === key);
+    if (index < 0) return 'background:#2b2f36';
+    return `background-image:url(assets/places.jpg);background-size:800% 800%;background-position:${((index % 8) / 7) * 100}% ${(Math.floor(index / 8) / 7) * 100}%`;
   }
 
   function css() {
     if (document.getElementById('launcher-style')) return;
     const font = document.createElement('link');
     font.rel = 'stylesheet';
-    font.href = 'https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Inter:wght@400;600;700&display=swap';
+    font.href = 'https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap';
     document.head.appendChild(font);
     const style = document.createElement('style');
     style.id = 'launcher-style';
     style.textContent = `
-      #launcher { position: fixed; inset: 0; z-index: 80; overflow: auto; color: #e9ecef; font: 14px Inter, "Segoe UI", Arial, sans-serif;
-        background: radial-gradient(1200px 500px at 15% -10%, rgba(46, 160, 67, 0.28), transparent 60%), radial-gradient(900px 500px at 100% 0%, rgba(31, 111, 235, 0.22), transparent 60%), linear-gradient(180deg, #0f1115 0%, #15181f 100%); }
-      #launcher .ln-top { position: sticky; top: 0; z-index: 2; margin: 14px auto 0; width: min(1180px, calc(100% - 28px)); display: flex; align-items: center; gap: 16px; padding: 12px 18px; border-radius: 18px; background: rgba(24, 26, 32, 0.86); border: 1px solid rgba(255,255,255,0.07); backdrop-filter: blur(10px); box-sizing: border-box; flex-wrap: wrap; }
-      #launcher .ln-logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; letter-spacing: -0.02em; }
-      #launcher .ln-logo img { height: 28px; }
-      #launcher nav { display: flex; gap: 4px; flex-wrap: wrap; }
-      #launcher nav button { background: none; border: 0; color: #adb5bd; font: 600 13px Inter, sans-serif; padding: 7px 10px; border-radius: 10px; cursor: pointer; }
-      #launcher nav button:hover { color: #fff; }
-      #launcher nav button.on { background: rgba(255,255,255,0.1); color: #fff; }
-      #launcher .ln-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
-      #launcher .ln-user { color: #ced4da; font-weight: 600; }
-      #launcher .ln-coins { font: 10px "Press Start 2P", monospace; padding: 9px 12px; border-radius: 12px; background: #f59f00; color: #1b1300; box-shadow: 0 0 18px rgba(245,159,0,0.35); white-space: nowrap; }
-      #launcher .ln-daily { font: 8px/1.4 "Press Start 2P", monospace; padding: 9px 12px; border-radius: 12px; border: 0; cursor: pointer; background: #2ea043; color: #fff; }
-      #launcher .ln-daily[disabled] { background: #2b3138; color: #8b949e; cursor: default; }
-      #launcher .ln-main { width: min(1180px, calc(100% - 28px)); margin: 26px auto 40px; display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 26px; align-items: start; }
-      @media (max-width: 900px) { #launcher .ln-main { grid-template-columns: 1fr; } }
-      #launcher .ln-tools { display: flex; gap: 10px; margin-bottom: 16px; }
-      #launcher .ln-search { flex: 1; max-width: 280px; padding: 11px 14px; border-radius: 14px; border: 1px solid rgba(255,255,255,0.08); background: #1e2229; color: #fff; font: inherit; }
-      #launcher .ln-sort { padding: 10px 12px; border-radius: 14px; border: 1px solid rgba(255,255,255,0.08); background: #1e2229; color: #fff; font: inherit; }
-      #launcher .ln-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 18px; }
-      #launcher .ln-card { cursor: pointer; }
-      #launcher .ln-cover { aspect-ratio: 3 / 4; border-radius: 18px; border: 3px solid transparent; position: relative; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.35); transition: transform 0.15s; }
-      #launcher .ln-card:hover .ln-cover { transform: translateY(-3px); }
-      #launcher .ln-card.on .ln-cover { border-color: #3fb950; box-shadow: 0 0 0 2px rgba(63,185,80,0.25), 0 10px 30px rgba(0,0,0,0.35); }
-      #launcher .ln-cover::after { content: ''; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,0.05) 40%, rgba(0,0,0,0.65) 100%); }
-      #launcher .ln-cover b { position: absolute; left: 12px; right: 12px; top: 12px; z-index: 1; font: 11px/1.5 "Press Start 2P", monospace; color: #fff; text-shadow: 0 2px 0 #000, 0 0 8px rgba(0,0,0,0.8); }
-      #launcher .ln-card-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
-      #launcher .ln-card-foot span { font: 12px "Press Start 2P", monospace; color: #fff; }
-      #launcher .ln-play { width: 34px; height: 34px; border-radius: 50%; border: 0; background: #2ea043; color: #fff; font-size: 13px; cursor: pointer; box-shadow: 0 0 0 4px rgba(46,160,67,0.18); }
-      #launcher .ln-play:hover { background: #3fb950; }
-      #launcher .ln-panel { position: sticky; top: 96px; padding: 18px; border-radius: 22px; background: #1c1f26; border: 1px solid rgba(255,255,255,0.07); box-shadow: 0 20px 50px rgba(0,0,0,0.4); }
-      #launcher .ln-hero { aspect-ratio: 16 / 10; border-radius: 16px; }
-      #launcher .ln-title { display: flex; align-items: center; gap: 12px; margin: 18px 0 10px; }
-      #launcher .ln-title i { width: 44px; height: 44px; border-radius: 10px; background: #2ea043 url(assets/icon.png) center / 70% no-repeat; flex: none; }
-      #launcher .ln-title h2 { margin: 0; font: 15px/1.6 "Press Start 2P", monospace; letter-spacing: 0.02em; }
-      #launcher .ln-desc { color: #adb5bd; line-height: 1.55; margin: 0 0 16px; padding-bottom: 16px; border-bottom: 1px solid rgba(255,255,255,0.08); }
-      #launcher .ln-launch-row { display: flex; gap: 10px; align-items: center; }
-      #launcher .ln-launch { flex: 1; padding: 15px; border-radius: 18px; border: 0; background: linear-gradient(180deg, #3fb950, #2ea043); color: #fff; font: 13px "Press Start 2P", monospace; cursor: pointer; box-shadow: 0 6px 0 #1a7f37, 0 10px 30px rgba(46,160,67,0.35); }
-      #launcher .ln-launch:active { transform: translateY(3px); box-shadow: 0 3px 0 #1a7f37; }
-      #launcher .ln-launch[disabled] { filter: grayscale(0.6); cursor: progress; }
-      #launcher .ln-gear { width: 50px; height: 50px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.12); background: #262a32; color: #fff; font-size: 20px; cursor: pointer; }
-      #launcher .ln-settings { display: none; margin-top: 14px; padding: 12px; border-radius: 14px; background: #262a32; }
-      #launcher .ln-settings label { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; color: #ced4da; }
-      #launcher .ln-settings select { background: #1c1f26; color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 5px 8px; }
-      #launcher .ln-entry { margin-top: 12px; font-size: 12px; color: #8b949e; }
-      #launcher .ln-list { display: grid; gap: 12px; }
-      #launcher .ln-row { display: flex; gap: 14px; align-items: center; padding: 14px; border-radius: 16px; background: #1c1f26; border: 1px solid rgba(255,255,255,0.06); }
-      #launcher .ln-row h3 { margin: 0 0 4px; font-size: 15px; }
-      #launcher .ln-row p { margin: 0; color: #adb5bd; }
-      #launcher .ln-dot { width: 10px; height: 10px; border-radius: 50%; background: #3fb950; box-shadow: 0 0 8px #3fb950; flex: none; }
-      #launcher .ln-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); padding: 12px 18px; border-radius: 14px; background: #1c1f26; border: 1px solid rgba(255,255,255,0.12); display: none; z-index: 3; }
+      #launcher { position: fixed; inset: 0; z-index: 80; overflow: hidden; color: #fff; font: 12px "Press Start 2P", monospace; background: #0d1117; }
+      #launcher .mc-page { position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px; box-sizing: border-box; overflow-y: auto; }
+      #launcher .mc-logo { position: relative; margin-bottom: 34px; text-align: center; }
+      #launcher .mc-logo img { width: min(560px, 82vw); filter: drop-shadow(0 6px 0 rgba(0,0,0,0.45)); }
+      #launcher .mc-splash { position: absolute; right: -10px; bottom: -14px; color: #ffff55; font-size: 12px; text-shadow: 2px 2px 0 #3f3f15; transform: rotate(-18deg); white-space: nowrap; animation: mc-splash 0.9s ease-in-out infinite alternate; }
+      @keyframes mc-splash { from { transform: rotate(-18deg) scale(0.92); } to { transform: rotate(-18deg) scale(1.06); } }
+      #launcher .mc-btn { width: min(400px, 88vw); padding: 13px 10px; border: 2px solid #000; background: linear-gradient(180deg, #8b8b8b 0%, #6f6f6f 100%); box-shadow: inset 2px 2px 0 #b5b5b5, inset -2px -3px 0 #4b4b4b; color: #fff; font: inherit; text-shadow: 2px 2px 0 #3a3a3a; cursor: pointer; image-rendering: pixelated; }
+      #launcher .mc-btn:hover { background: linear-gradient(180deg, #8f9bd8 0%, #6a78c0 100%); box-shadow: inset 2px 2px 0 #c3cbf5, inset -2px -3px 0 #3d4a8f; color: #ffffa0; }
+      #launcher .mc-btn[disabled] { background: #3c3c3c; color: #a0a0a0; box-shadow: none; cursor: default; }
+      #launcher .mc-row { display: flex; gap: 8px; width: min(400px, 88vw); }
+      #launcher .mc-row .mc-btn { width: auto; flex: 1; }
+      #launcher .mc-corner { position: absolute; z-index: 2; bottom: 8px; font-size: 9px; color: #fff; text-shadow: 1px 1px 0 #000; }
+      #launcher .mc-title { font-size: 14px; margin-bottom: 10px; text-shadow: 2px 2px 0 #3a3a3a; }
+      #launcher .mc-list { width: min(620px, 92vw); max-height: 58vh; overflow-y: auto; background: rgba(0,0,0,0.55); border: 2px solid #000; box-shadow: inset 0 0 0 2px #4b4b4b; padding: 6px; box-sizing: border-box; }
+      #launcher .mc-entry { display: flex; gap: 12px; align-items: center; padding: 6px; border: 2px solid transparent; cursor: pointer; }
+      #launcher .mc-entry:hover, #launcher .mc-entry.on { border-color: #a0a0a0; background: rgba(255,255,255,0.06); }
+      #launcher .mc-entry i { width: 96px; height: 67px; flex: none; image-rendering: auto; border: 1px solid #000; }
+      #launcher .mc-entry b { display: block; font-size: 11px; margin-bottom: 7px; }
+      #launcher .mc-entry span { font: 13px/1.35 "Segoe UI", Arial, sans-serif; color: #b8b8b8; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+      #launcher .mc-options label { display: flex; justify-content: space-between; align-items: center; gap: 12px; width: min(400px, 88vw); margin: 4px 0; font-size: 10px; }
+      #launcher .mc-options select { font: 10px "Press Start 2P", monospace; background: #1c1c1c; color: #fff; border: 2px solid #000; padding: 6px; }
+      #launcher .mc-joining { gap: 18px; }
+      #launcher .mc-joining p { margin: 0; text-shadow: 2px 2px 0 #3a3a3a; text-align: center; line-height: 1.6; }
+      #launcher .mc-bar { width: min(420px, 80vw); height: 14px; border: 2px solid #000; background: #2b2b2b; box-shadow: inset 0 0 0 2px #555; }
+      #launcher .mc-bar div { height: 100%; width: 0; background: linear-gradient(180deg, #7ae36a, #3fa034); transition: width 0.25s linear; }
+      #launcher .mc-dirt { position: absolute; inset: 0; z-index: 0; background: #3b2a1e url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' shape-rendering='crispEdges'%3E%3Crect width='32' height='32' fill='%23593d29'/%3E%3Crect x='4' y='6' width='4' height='4' fill='%23795548'/%3E%3Crect x='18' y='2' width='4' height='4' fill='%234a3222'/%3E%3Crect x='24' y='16' width='4' height='4' fill='%23795548'/%3E%3Crect x='10' y='20' width='4' height='4' fill='%234a3222'/%3E%3Crect x='2' y='26' width='4' height='4' fill='%236d4c41'/%3E%3Crect x='20' y='26' width='4' height='4' fill='%234a3222'/%3E%3C/svg%3E") repeat; background-size: 64px 64px; filter: brightness(0.45); }
     `;
     document.head.appendChild(style);
   }
@@ -303,148 +259,124 @@ const Launcher = (() => {
     return fetch(url, { ...options, headers }).then(async (response) => ({ ok: response.ok, data: await response.json().catch(() => ({})) }));
   }
 
-  function toast(text) {
-    const box = state.root.querySelector('.ln-toast');
-    box.textContent = text;
-    box.style.display = 'block';
-    clearTimeout(state.toastTimer);
-    state.toastTimer = setTimeout(() => { box.style.display = 'none'; }, 3200);
+  function page(html) {
+    const old = state.root.querySelector('.mc-page');
+    if (old) old.remove();
+    const div = document.createElement('div');
+    div.className = 'mc-page';
+    div.innerHTML = html;
+    state.root.appendChild(div);
+    return div;
   }
 
-  function renderWallet() {
-    const coins = state.root.querySelector('.ln-coins');
-    const daily = state.root.querySelector('.ln-daily');
-    coins.textContent = state.coins === null ? 'MVC · solo' : `${state.coins} MVC`;
-    if (!Auth.hasServer) { daily.disabled = true; daily.textContent = 'Daily bonus · online only'; return; }
-    const wait = Math.max(0, (state.nextDailyAt || 0) - Date.now());
-    daily.disabled = wait > 0;
-    daily.textContent = wait > 0 ? `Next bonus in ${Math.ceil(wait / 3600000)} h` : 'Claim daily bonus (+50 MVC)';
+  function titleScreen() {
+    const coins = state.coins === null ? 'Solo mode' : `${state.coins} MVC`;
+    const view = page(`
+      <div class="mc-logo"><img src="assets/logo.png" alt="GitHub Multiverse"><span class="mc-splash">${esc(SPLASHES[Math.floor(Math.random() * SPLASHES.length)])}</span></div>
+      <button class="mc-btn" data-go="join">Join Genesis City</button>
+      <button class="mc-btn" data-go="worlds">Worlds...</button>
+      <button class="mc-btn" data-go="lobby">Private Lobby</button>
+      <div class="mc-row"><button class="mc-btn" data-go="options">Options...</button><button class="mc-btn" data-go="daily"${Auth.hasServer ? '' : ' disabled'}>Daily bonus</button></div>`);
+    view.querySelector('[data-go="join"]').addEventListener('click', () => join('plaza', 'Genesis City'));
+    view.querySelector('[data-go="worlds"]').addEventListener('click', worldsScreen);
+    view.querySelector('[data-go="lobby"]').addEventListener('click', () => { location.search = `?lobby=${Math.random().toString(36).slice(2, 8)}`; });
+    view.querySelector('[data-go="options"]').addEventListener('click', optionsScreen);
+    view.querySelector('[data-go="daily"]').addEventListener('click', claimDaily);
+    corner(`${esc(state.session.username)} · ${coins}`);
   }
 
-  function cardHtml(entry) {
-    return `<div class="ln-card${state.selected === entry.key ? ' on' : ''}" data-key="${entry.key}">
-      <div class="ln-cover" style="${tileStyle(entry.tile || entry.key)}"><b>${esc(entry.title)}</b></div>
-      <div class="ln-card-foot"><span>${esc(entry.version)}</span><button class="ln-play" data-play="${entry.key}" title="Play ${esc(entry.title)}">&#9654;</button></div></div>`;
-  }
-
-  function renderLeft() {
-    const left = state.root.querySelector('.ln-left');
-    const tab = state.tab;
-    if (tab === 'home' || tab === 'play' || tab === 'worlds') {
-      const query = (state.query || '').toLowerCase();
-      let list = tab === 'worlds'
-        ? worlds.filter((world) => world.key !== 'plaza').map((world, i) => ({ key: world.key, title: world.name, version: world.world ? 'World' : 'District', popular: world.world ? 2 : 1, date: i, text: world.description }))
-        : ENTRIES.slice();
-      list = list.filter((entry) => !query || `${entry.title} ${entry.version}`.toLowerCase().includes(query));
-      const sort = state.sort || 'popular';
-      list.sort((a, b) => (sort === 'az' ? a.title.localeCompare(b.title) : sort === 'newest' ? b.date - a.date : b.popular - a.popular));
-      left.innerHTML = `<div class="ln-tools"><input class="ln-search" placeholder="Search versions..." value="${esc(state.query || '')}"/>
-        <select class="ln-sort"><option value="popular"${sort === 'popular' ? ' selected' : ''}>Popular</option><option value="newest"${sort === 'newest' ? ' selected' : ''}>Newest</option><option value="az"${sort === 'az' ? ' selected' : ''}>A-Z</option></select></div>
-        <div class="ln-grid">${list.map(cardHtml).join('') || '<p style="color:#8b949e">Nothing found.</p>'}</div>`;
-      const search = left.querySelector('.ln-search');
-      search.addEventListener('input', () => { state.query = search.value; const caret = search.selectionStart; renderLeft(); const again = state.root.querySelector('.ln-search'); again.focus(); again.setSelectionRange(caret, caret); });
-      left.querySelector('.ln-sort').addEventListener('change', (event) => { state.sort = event.target.value; renderLeft(); });
-      state.visible = list;
-      left.querySelectorAll('.ln-card').forEach((card) => card.addEventListener('click', (event) => {
-        if (event.target.closest('.ln-play')) return;
-        select(card.dataset.key);
-      }));
-      left.querySelectorAll('[data-play]').forEach((button) => button.addEventListener('click', () => launch(button.dataset.play)));
-    } else if (tab === 'servers') {
-      left.innerHTML = `<div class="ln-list">
-        <div class="ln-row"><span class="ln-dot" style="${Auth.hasServer ? '' : 'background:#f59f00;box-shadow:0 0 8px #f59f00'}"></span><div style="flex:1"><h3>Genesis · main server</h3><p>${Auth.hasServer ? 'Online · multiplayer, chat, land and scenes' : 'Solo mode: no multiplayer server on this host'}</p></div><button class="ln-play" data-play="plaza">&#9654;</button></div>
-        <div class="ln-row"><span class="ln-dot"></span><div style="flex:1"><h3>Private lobby</h3><p>Your own instance: only devs with the invite link see you</p></div><button class="ln-play" data-play="private">&#9654;</button></div></div>`;
-      left.querySelectorAll('[data-play]').forEach((button) => button.addEventListener('click', () => launch(button.dataset.play)));
-    } else if (tab === 'packs') {
-      let quality = 'auto';
-      let sound = true;
-      try { quality = localStorage.getItem('multiverse-quality') || 'auto'; sound = localStorage.getItem('multiverse-sound') !== 'off'; } catch (error) { /* storage blocked */ }
-      left.innerHTML = `<div class="ln-list">${[['minimum', 'Potato', 'Old computers: no shadows, short view distance'], ['low', 'Light', 'Laptops and integrated graphics'], ['medium', 'Default', 'Balanced look and speed'], ['high', 'Ultra', 'Big shadows and the longest view distance'], ['auto', 'Auto', 'The game picks and adapts while you play']].map(([value, name, text]) => `<div class="ln-row"><div style="flex:1"><h3>${name} graphics pack</h3><p>${text}</p></div><button class="ln-play" data-pack="${value}" style="${quality === value ? '' : 'background:#30363d'}">${quality === value ? '&#10003;' : '+'}</button></div>`).join('')}
-        <div class="ln-row"><div style="flex:1"><h3>Sound pack</h3><p>Mouse glide, firepits, birds and the night soundtrack</p></div><button class="ln-play" data-sound="1" style="${sound ? '' : 'background:#30363d'}">${sound ? '&#10003;' : '+'}</button></div></div>`;
-      left.querySelectorAll('[data-pack]').forEach((button) => button.addEventListener('click', () => { try { localStorage.setItem('multiverse-quality', button.dataset.pack); } catch (error) { /* storage blocked */ } renderLeft(); toast('Graphics pack applied when the world opens.'); }));
-      left.querySelector('[data-sound]').addEventListener('click', () => { try { localStorage.setItem('multiverse-sound', sound ? 'off' : 'on'); } catch (error) { /* storage blocked */ } renderLeft(); });
-    } else if (tab === 'news') {
-      left.innerHTML = `<div class="ln-list">${NEWS.map(([title, text]) => `<div class="ln-row"><div><h3>${esc(title)}</h3><p>${esc(text)}</p></div></div>`).join('')}</div>`;
+  function corner(text) {
+    let left = state.root.querySelector('.mc-corner.left');
+    if (!left) {
+      left = document.createElement('div'); left.className = 'mc-corner left'; left.style.left = '8px'; state.root.appendChild(left);
+      const right = document.createElement('div'); right.className = 'mc-corner'; right.style.right = '8px'; right.textContent = 'GitHub Multiverse v10'; state.root.appendChild(right);
     }
+    left.textContent = text;
   }
 
-  function select(key) {
-    state.selected = key;
-    const entry = ENTRIES.find((item) => item.key === key) || (() => { const world = worlds.find((item) => item.key === key); return world && { key, title: world.name, text: world.description }; })() || ENTRIES[0];
-    state.root.querySelector('.ln-hero').setAttribute('style', tileStyle(entry.tile || entry.key));
-    state.root.querySelector('.ln-entry').textContent = `Starting point: ${entry.title}`;
-    state.root.querySelectorAll('.ln-card').forEach((card) => card.classList.toggle('on', card.dataset.key === key));
+  function worldsScreen() {
+    const list = worlds.filter((world) => world.key !== 'plaza').sort((a, b) => (b.world ? 1 : 0) - (a.world ? 1 : 0));
+    const view = page(`<div class="mc-title">Select World</div>
+      <div class="mc-list">${list.map((world) => `<div class="mc-entry" data-key="${esc(world.key)}"><i style="${tile(world.key)}"></i><div><b>${esc(world.name)}${world.world ? '' : ' <small style="color:#9e9e9e">(district)</small>'}</b><span>${esc(world.description || '')}</span></div></div>`).join('')}</div>
+      <div class="mc-row"><button class="mc-btn" data-go="play" disabled>Join World</button><button class="mc-btn" data-go="back">Back</button></div>`);
+    let selected = null;
+    view.querySelectorAll('.mc-entry').forEach((entry) => {
+      entry.addEventListener('click', () => { selected = entry.dataset.key; view.querySelectorAll('.mc-entry').forEach((other) => other.classList.toggle('on', other === entry)); view.querySelector('[data-go="play"]').disabled = false; });
+      entry.addEventListener('dblclick', () => join(entry.dataset.key, entry.querySelector('b').textContent));
+    });
+    view.querySelector('[data-go="play"]').addEventListener('click', () => { const world = worlds.find((item) => item.key === selected); if (world) join(world.key, world.name); });
+    view.querySelector('[data-go="back"]').addEventListener('click', titleScreen);
   }
 
-  function launch(key) {
-    const target = key || state.selected || 'plaza';
-    if (target === 'private' && !new URLSearchParams(location.search).get('lobby')) {
-      const id = Math.random().toString(36).slice(2, 8);
-      location.search = `?lobby=${id}`;
-      return;
-    }
-    const button = state.root.querySelector('.ln-launch');
-    button.disabled = true;
-    button.textContent = 'LOADING WORLD...';
-    Promise.resolve(state.ready).then(() => {
-      state.root.remove();
-      state.resolve({ session: state.session, entry: target === 'private' ? 'plaza' : target });
+  function optionsScreen() {
+    let quality = 'auto';
+    let sound = true;
+    try { quality = localStorage.getItem('multiverse-quality') || 'auto'; sound = localStorage.getItem('multiverse-sound') !== 'off'; } catch (error) { /* storage blocked */ }
+    const view = page(`<div class="mc-title">Options</div><div class="mc-options">
+      <label>Graphics <select class="mc-quality">${['auto', 'minimum', 'low', 'medium', 'high'].map((value) => `<option value="${value}"${value === quality ? ' selected' : ''}>${value[0].toUpperCase() + value.slice(1)}</option>`).join('')}</select></label></div>
+      <button class="mc-btn" data-go="sound">Sound: ${sound ? 'ON' : 'OFF'}</button>
+      <button class="mc-btn" data-go="signout">Sign out</button>
+      <button class="mc-btn" data-go="back">Done</button>`);
+    view.querySelector('.mc-quality').addEventListener('change', (event) => { try { localStorage.setItem('multiverse-quality', event.target.value); } catch (error) { /* storage blocked */ } });
+    view.querySelector('[data-go="sound"]').addEventListener('click', () => { try { localStorage.setItem('multiverse-sound', sound ? 'off' : 'on'); } catch (error) { /* storage blocked */ } optionsScreen(); });
+    view.querySelector('[data-go="signout"]').addEventListener('click', () => Auth.signOut());
+    view.querySelector('[data-go="back"]').addEventListener('click', titleScreen);
+  }
+
+  function claimDaily() {
+    request('/api/daily', { method: 'POST' }).then(({ ok, data }) => {
+      if (typeof data.coins === 'number') state.coins = data.coins;
+      const button = state.root.querySelector('[data-go="daily"]');
+      if (button) { button.textContent = ok ? `+${data.earned} MVC!` : 'Come back later'; button.disabled = true; }
+      corner(`${esc(state.session.username)} · ${state.coins === null ? 'Solo mode' : `${state.coins} MVC`}`);
+    }).catch(() => {});
+  }
+
+  // "Joining world": dirt background, a status line and a progress bar that
+  // follows the real loading, then the world fades in
+  function join(key, name) {
+    const view = page(`<p>Joining world...</p><p class="mc-step" style="color:#c6c6c6;font-size:10px">Connecting to ${esc(name)}</p><div class="mc-bar"><div></div></div>`);
+    view.classList.add('mc-joining');
+    const panorama = state.root.querySelector('.mv-panorama');
+    if (panorama) panorama.style.display = 'none';
+    const dirt = document.createElement('div');
+    dirt.className = 'mc-dirt';
+    state.root.prepend(dirt);
+    state.root.querySelectorAll('.mc-corner').forEach((element) => element.remove());
+    const bar = view.querySelector('.mc-bar div');
+    const step = view.querySelector('.mc-step');
+    const steps = ['Connecting to ' + name, 'Loading terrain', 'Building terrain', 'Spawning your cursor'];
+    let progress = 0;
+    let done = false;
+    const timer = setInterval(() => {
+      progress = done ? 100 : Math.min(92, progress + (92 - progress) * 0.08 + 0.6);
+      bar.style.width = `${progress}%`;
+      step.textContent = steps[Math.min(steps.length - 1, Math.floor(progress / 26))];
+    }, 120);
+    // The joining screen stays at least ~2 s, so the animation is always seen
+    const shownAt = performance.now();
+    Promise.resolve(state.ready).then(() => new Promise((resolve) => setTimeout(resolve, Math.max(0, 2000 - (performance.now() - shownAt))))).then(() => {
+      done = true;
+      setTimeout(() => {
+        clearInterval(timer);
+        state.root.remove();
+        state.resolve({ session: state.session, entry: key });
+      }, 450);
     });
   }
 
-  // Shows the launcher; resolves with { session, entry } when the dev launches
+  // Shows the title screen; resolves with { session, entry } when the dev joins
   function open(session, ready) {
     css();
     return new Promise(async (resolve) => {
       worlds = await fetch('maps/worlds.json').then((response) => response.json()).catch(() => []);
       const root = document.createElement('div');
       root.id = 'launcher';
-      root.innerHTML = `
-        <header class="ln-top"><div class="ln-logo"><img src="assets/logo.png" alt="GitHub Multiverse"/></div>
-          <nav>${[['home', 'Home'], ['play', 'Play'], ['servers', 'Servers'], ['worlds', 'Worlds'], ['packs', 'Resource Packs'], ['news', 'News']].map(([key, name]) => `<button data-tab="${key}"${key === 'play' ? ' class="on"' : ''}>${name}</button>`).join('')}</nav>
-          <div class="ln-right"><span class="ln-user">${esc(session.username)}</span><span class="ln-coins">... MVC</span><button class="ln-daily" type="button">Claim daily bonus (+50 MVC)</button></div></header>
-        <main class="ln-main"><section class="ln-left"></section>
-          <aside class="ln-panel"><div class="ln-hero"></div>
-            <div class="ln-title"><i></i><h2>GITHUB MULTIVERSE v1.0</h2></div>
-            <p class="ln-desc">The developers' metaverse in your browser: walk Genesis City as a 3D cursor, code with Codify, fry your bugs at the firepits, buy land and build scenes, and jump into worlds like Silicon Valley and Squid Game Epic Edition.</p>
-            <div class="ln-launch-row"><button class="ln-launch" type="button">&#9654; LAUNCH GAME</button><button class="ln-gear" type="button" title="Settings">&#9881;</button></div>
-            <div class="ln-settings"><label>Graphics <select class="ln-quality"><option value="auto">Auto</option><option value="minimum">Minimum</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
-              <label>Sound <input type="checkbox" class="ln-sound"/></label><label>Sign out <button type="button" class="ln-signout" style="background:#30363d;color:#fff;border:0;border-radius:8px;padding:5px 10px;cursor:pointer">Sign out</button></label></div>
-            <p class="ln-entry"></p></aside></main>
-        <div class="ln-toast"></div>`;
       document.body.appendChild(root);
-      state = { root, session, ready, resolve, tab: 'play', selected: 'plaza', coins: Auth.hasServer ? 0 : null, nextDailyAt: 0 };
-      renderLeft();
-      select('plaza');
-      renderWallet();
-      root.querySelectorAll('nav button').forEach((button) => button.addEventListener('click', () => {
-        state.tab = button.dataset.tab;
-        root.querySelectorAll('nav button').forEach((other) => other.classList.toggle('on', other === button));
-        renderLeft();
-      }));
-      root.querySelector('.ln-launch').addEventListener('click', () => launch());
-      // Settings (gear): graphics quality, sound, sign out
-      const settings = root.querySelector('.ln-settings');
-      root.querySelector('.ln-gear').addEventListener('click', () => { settings.style.display = settings.style.display === 'block' ? 'none' : 'block'; });
-      const quality = root.querySelector('.ln-quality');
-      const sound = root.querySelector('.ln-sound');
-      try { quality.value = localStorage.getItem('multiverse-quality') || 'auto'; sound.checked = localStorage.getItem('multiverse-sound') !== 'off'; } catch (error) { /* storage blocked */ }
-      quality.addEventListener('change', () => { try { localStorage.setItem('multiverse-quality', quality.value); } catch (error) { /* storage blocked */ } });
-      sound.addEventListener('change', () => { try { localStorage.setItem('multiverse-sound', sound.checked ? 'on' : 'off'); } catch (error) { /* storage blocked */ } });
-      root.querySelector('.ln-signout').addEventListener('click', () => Auth.signOut());
-      // Wallet and daily bonus
-      if (Auth.hasServer) {
-        request('/api/wallet').then(({ ok, data }) => { if (ok) { state.coins = data.coins; state.nextDailyAt = Date.now() + (data.nextDailyInMs || 0); renderWallet(); } }).catch(() => {});
-      }
-      root.querySelector('.ln-daily').addEventListener('click', () => {
-        request('/api/daily', { method: 'POST' }).then(({ ok, data }) => {
-          if (typeof data.coins === 'number') state.coins = data.coins;
-          state.nextDailyAt = Date.now() + (data.nextDailyInMs || 0);
-          renderWallet();
-          toast(ok ? `+${data.earned} MVC daily bonus claimed!` : data.error || 'Could not claim the bonus.');
-        }).catch(() => toast('Could not reach the server.'));
-      });
-      setInterval(renderWallet, 60000);
+      if (typeof MultiversePanorama !== 'undefined') MultiversePanorama.attach(root);
+      state = { root, session, ready, resolve, coins: Auth.hasServer ? 0 : null };
+      titleScreen();
+      if (Auth.hasServer) request('/api/wallet').then(({ ok, data }) => { if (ok) { state.coins = data.coins; corner(`${esc(session.username)} · ${data.coins} MVC`); } }).catch(() => {});
     });
   }
 
@@ -452,56 +384,61 @@ const Launcher = (() => {
 })();
 
 // ============================================================================
-// LOGIN PANORAMA (MINECRAFT TITLE SCREEN STYLE)
+// PANORAMA (MINECRAFT TITLE SCREEN STYLE)
 // ============================================================================
-// Behind the welcome card, screenshots of the worlds and districts drift
-// slowly and cross-fade one into the next, like the Minecraft title screen.
-// The shots are tiles of assets/places.jpg (8 x 8 tiles in worlds.json order).
-(() => {
-  const screen = document.getElementById('auth-screen');
-  if (!screen) return;
+// Behind the welcome card and the title screen, screenshots of the worlds and
+// districts drift slowly and cross-fade one into the next, like the Minecraft
+// title screen. The shots are tiles of assets/places.jpg (8 x 8, worlds.json order).
+const MultiversePanorama = (() => {
   const TILES = [57, 41, 38, 0, 39, 15, 33, 23, 40, 8, 36, 1, 35, 46, 37, 16];
   const SHOW_MS = 7000;
   const style = document.createElement('style');
   style.textContent = `
-    #auth-panorama { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; background: #0d1117; }
-    #auth-panorama div { position: absolute; left: 50%; top: 50%; width: max(130vw, 186vh); aspect-ratio: 320 / 224; opacity: 0; filter: blur(1.5px) saturate(1.1);
+    .mv-panorama { position: absolute; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; background: #0d1117; }
+    #auth-screen > .mv-panorama { position: fixed; }
+    .mv-panorama div { position: absolute; left: 50%; top: 50%; width: max(130vw, 186vh); aspect-ratio: 320 / 224; opacity: 0; filter: blur(1.5px) saturate(1.1);
       background-image: url(assets/places.jpg); background-size: 800% 800%; transition: opacity 2.4s ease-in-out; will-change: transform, opacity; }
-    #auth-panorama div.on { opacity: 1; }
-    #auth-panorama div.pan-a { animation: auth-pan-a 16s linear forwards; }
-    #auth-panorama div.pan-b { animation: auth-pan-b 16s linear forwards; }
-    @keyframes auth-pan-a { from { transform: translate(-53%, -50%) scale(1.02); } to { transform: translate(-47%, -51%) scale(1.1); } }
-    @keyframes auth-pan-b { from { transform: translate(-47%, -51%) scale(1.1); } to { transform: translate(-53%, -49%) scale(1.02); } }
-    #auth-panorama::after { content: ''; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(13, 17, 23, 0.3), rgba(13, 17, 23, 0.72)); }
-    @media (prefers-reduced-motion: reduce) { #auth-panorama div.pan-a, #auth-panorama div.pan-b { animation: none; transform: translate(-50%, -50%); } }
-    #auth-screen > :not(#auth-panorama) { position: relative; z-index: 1; }
+    .mv-panorama div.on { opacity: 1; }
+    .mv-panorama div.pan-a { animation: mv-pan-a 16s linear forwards; }
+    .mv-panorama div.pan-b { animation: mv-pan-b 16s linear forwards; }
+    @keyframes mv-pan-a { from { transform: translate(-53%, -50%) scale(1.02); } to { transform: translate(-47%, -51%) scale(1.1); } }
+    @keyframes mv-pan-b { from { transform: translate(-47%, -51%) scale(1.1); } to { transform: translate(-53%, -49%) scale(1.02); } }
+    .mv-panorama::after { content: ''; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(13, 17, 23, 0.25), rgba(13, 17, 23, 0.6)); }
+    @media (prefers-reduced-motion: reduce) { .mv-panorama div.pan-a, .mv-panorama div.pan-b { animation: none; transform: translate(-50%, -50%); } }
+    #auth-screen > :not(.mv-panorama) { position: relative; z-index: 1; }
   `;
   document.head.appendChild(style);
-  const panorama = document.createElement('div');
-  panorama.id = 'auth-panorama';
-  const slides = [document.createElement('div'), document.createElement('div')];
-  slides.forEach((slide) => panorama.appendChild(slide));
-  screen.prepend(panorama);
-  let turn = 0;
-  let timer = null;
-  function show() {
-    const slide = slides[turn % 2];
-    const other = slides[(turn + 1) % 2];
-    const tile = TILES[turn % TILES.length];
-    slide.style.backgroundPosition = `${((tile % 8) / 7) * 100}% ${(Math.floor(tile / 8) / 7) * 100}%`;
-    slide.className = '';
-    void slide.offsetWidth; // restart the drift animation
-    slide.className = `on ${turn % 2 ? 'pan-b' : 'pan-a'}`;
-    other.classList.remove('on');
-    turn += 1;
-  }
-  const atlas = new Image();
-  atlas.onload = () => {
-    show();
-    timer = setInterval(() => {
-      if (!document.body.contains(screen) || screen.classList.contains('leaving') || getComputedStyle(screen).display === 'none') { clearInterval(timer); return; }
+  function attach(host) {
+    const panorama = document.createElement('div');
+    panorama.className = 'mv-panorama';
+    const slides = [document.createElement('div'), document.createElement('div')];
+    slides.forEach((slide) => panorama.appendChild(slide));
+    host.prepend(panorama);
+    let turn = Math.floor(Math.random() * TILES.length);
+    function show() {
+      const slide = slides[turn % 2];
+      const other = slides[(turn + 1) % 2];
+      const tile = TILES[turn % TILES.length];
+      slide.style.backgroundPosition = `${((tile % 8) / 7) * 100}% ${(Math.floor(tile / 8) / 7) * 100}%`;
+      slide.className = '';
+      void slide.offsetWidth; // restart the drift animation
+      slide.className = `on ${turn % 2 ? 'pan-b' : 'pan-a'}`;
+      other.classList.remove('on');
+      turn += 1;
+    }
+    const atlas = new Image();
+    atlas.onload = () => {
       show();
-    }, SHOW_MS);
-  };
-  atlas.src = 'assets/places.jpg';
+      const timer = setInterval(() => {
+        const gone = !document.body.contains(panorama) || panorama.style.display === 'none' || host.classList.contains('leaving') || getComputedStyle(host).display === 'none';
+        if (gone) { clearInterval(timer); return; }
+        show();
+      }, SHOW_MS);
+    };
+    atlas.src = 'assets/places.jpg';
+    return panorama;
+  }
+  const screen = document.getElementById('auth-screen');
+  if (screen) attach(screen);
+  return { attach };
 })();

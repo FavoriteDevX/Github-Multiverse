@@ -136,7 +136,11 @@ const Quality = (() => {
   const pixelRatio = () => Math.min(window.devicePixelRatio || 1, RATIOS[current]);
   const viewDistance = () => VIEW[current];
 
+  // How far the city is drawn at each level (the fog closes in to match)
+  const FAR = [320, 420, 560, 900];
+  window.MULTIVERSE_VIEW_CAP = FAR[current];
   function apply() {
+    window.MULTIVERSE_VIEW_CAP = FAR[current];
     if (!renderer) return;
     renderer.setPixelRatio(pixelRatio());
     renderer.setSize(window.innerWidth, window.innerHeight);
@@ -267,6 +271,7 @@ function initEngine() {
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap;
+  renderer.shadowMap.autoUpdate = false;
   // Filmic tone mapping + an image-based environment give every material soft,
   // realistic reflections (glass, metal, polished floors) instead of flat colors
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -1774,6 +1779,7 @@ function setupNetwork(session) {
 // is not drawn at all: those screens stay smooth and the districts finish
 // building sooner, instead of the GPU drawing frames nobody can see
 let coverScreens = null;
+let shadowFrame = 0;
 function worldCovered() {
   if (!coverScreens) coverScreens = { auth: document.getElementById('auth-screen') };
   const auth = coverScreens.auth;
@@ -1801,7 +1807,7 @@ function animate() {
   updateLocalCursorFromPointer();
   emitCursor(false);
 
-  const { flash, haze, inCloud } = City.updateEnvironment({ ticks: currentTicks(), weather: worldClock.weather, camera, focus: controls.target, deltaSeconds, time: elapsed });
+  const { flash, haze, inCloud, sunMoved } = City.updateEnvironment({ ticks: currentTicks(), weather: worldClock.weather, camera, focus: controls.target, deltaSeconds, time: elapsed });
   // Firelight: the firepits register themselves once built; 0 by day, 1 at night with a dusk/dawn ramp
   (window.firepits || []).forEach((pit) => { if (!pit.userData.fireLit) { pit.userData.fireLit = true; FireLights.register(pit, { radius: 11, height: 1.4, strength: 1.15 }); } });
   {
@@ -1902,6 +1908,10 @@ function animate() {
       camera.position.y = cameraGround + 0.6;
     }
   }
+  // Shadows are redrawn when the sun steps along with the player, and every
+  // third frame for things that move (instead of every single frame)
+  shadowFrame += 1;
+  if (sunMoved || shadowFrame % 3 === 0) renderer.shadowMap.needsUpdate = true;
   renderer.render(scene, camera);
   VideoScreens.update(camera, avatar.position, () => City.collidablesAt(avatar.position.x, avatar.position.z));
   if (restoreCamera) camera.position.copy(restoreCamera);
