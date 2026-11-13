@@ -29,5 +29,15 @@
     "end": 0
    }
   ]
+ },
+ "appleReel": {
+  "_how_to": "Apple animation videos played back to back on the Tech Square reel screen. 'start' and 'end' are seconds into each official video (end 0 = until the video ends). Only animation segments: add clips of jGztGfRujSE here with the start and end of each part that has no people talking.",
+  "clips": [
+   {
+    "video": "https://youtu.be/z0v8BRC1664",
+    "start": 0,
+    "end": 0
+   }
+  ]
  }
 }
