@@ -337,8 +337,13 @@
 
       group.add(box(w, 0.1, d, material('#cfd8dc', { roughness: 0.9 }), 0, base + 0.05, 0));
       const shell = new THREE.Group();
-      const outside = new THREE.MeshStandardMaterial({ map: repeated(windowsTexture(wallColor, isWarm ? '#f4e3cf' : '#cfe8ff'), Math.max(1, Math.round(bw / 5)), floors), roughness: 0.5, metalness: 0.2 });
-      const sideWall = new THREE.MeshStandardMaterial({ map: repeated(windowsTexture(wallColor, isWarm ? '#f4e3cf' : '#cfe8ff'), Math.max(1, Math.round(bd / 5)), floors), roughness: 0.5, metalness: 0.2 });
+      // GitHub (88 Colin P. Kelly Jr. St) and OpenAI (the Pioneer Building in the
+      // Mission) are brick buildings in San Francisco: brick walls, tall windows
+      const brick = /github|openai/.test(type) && PropKit.kit.brickTexture;
+      const outside = brick
+        ? new THREE.MeshStandardMaterial({ map: repeated(PropKit.kit.brickTexture(/github/.test(type) ? '#8e3b2b' : '#b07a55'), Math.max(1, Math.round(bw / 3)), Math.max(1, Math.round(h / 3))), roughness: 0.85 })
+        : new THREE.MeshStandardMaterial({ map: repeated(windowsTexture(wallColor, isWarm ? '#f4e3cf' : '#cfe8ff'), Math.max(1, Math.round(bw / 5)), floors), roughness: 0.5, metalness: 0.2 });
+      const sideWall = brick ? outside : new THREE.MeshStandardMaterial({ map: repeated(windowsTexture(wallColor, isWarm ? '#f4e3cf' : '#cfe8ff'), Math.max(1, Math.round(bd / 5)), floors), roughness: 0.5, metalness: 0.2 });
       // Back and side walls
       shell.add(box(bw, h, wallThickness, outside, 0, base + h / 2, bz - bd / 2));
       [-1, 1].forEach((side) => shell.add(box(wallThickness, h, bd, sideWall, side * bw / 2, base + h / 2, bz)));
@@ -348,6 +353,39 @@
       shell.add(box(doorWidth, h - doorHeight, wallThickness, outside, 0, base + doorHeight + (h - doorHeight) / 2, frontZ));
       shell.add(box(doorWidth + 0.6, 0.4, 1.6, material(brandColor), 0, base + doorHeight + 0.2, frontZ + 0.8));
       group.add(shell);
+      if (brick) {
+        // Tall steel-framed windows on the brick, a stone cornice on top
+        const panes = new THREE.Group();
+        const glass = material('#1d2a33', { roughness: 0.1, metalness: 0.6 });
+        const frame = material('#1a1a1a', { metalness: 0.5 });
+        for (let f = 0; f < floors; f++) {
+          const y = base + f * floorHeight + floorHeight * 0.55;
+          for (let x = -bw / 2 + 2.5; x <= bw / 2 - 2.5; x += 3.2) {
+            if (f === 0 && Math.abs(x) < doorWidth) continue;
+            panes.add(box(1.8, floorHeight * 0.62, 0.08, glass, x, y, frontZ + 0.2));
+            panes.add(box(2, 0.12, 0.14, frame, x, y + floorHeight * 0.31, frontZ + 0.22));
+            panes.add(box(0.1, floorHeight * 0.62, 0.12, frame, x, y, frontZ + 0.22));
+          }
+          [-1, 1].forEach((side) => {
+            for (let z = bz - bd / 2 + 2.5; z <= bz + bd / 2 - 2.5; z += 3.2) panes.add(box(0.08, floorHeight * 0.62, 1.8, glass, side * (bw / 2 + 0.2), y, z));
+          });
+        }
+        panes.add(box(bw + 0.8, 0.6, bd + 0.8, material('#d9d2c3', { roughness: 0.8 }), 0, base + h + 0.1, bz));
+        group.add(PropKit.kit.mergeByMaterial(panes));
+      }
+      if (/github/.test(type)) {
+        // The lobby of the real GitHub HQ is a replica of the Oval Office:
+        // an oval blue rug, a heavy wooden desk and two flags behind it
+        const oval = cylinder(1, 1, 0.04, material('#1f3a68', { roughness: 1 }), 0, base + 0.22, bz - bd * 0.18, 40);
+        oval.scale.set(5, 1, 3.4);
+        group.add(oval);
+        group.add(box(3.4, 1.05, 1.6, material('#5b3a21', { roughness: 0.6 }), 0, base + 0.75, bz - bd * 0.3));
+        [-1.6, 1.6].forEach((x, i) => {
+          group.add(cylinder(0.04, 0.04, 2.6, material('#c9a64b', { metalness: 0.8 }), x, base + 1.5, bz - bd / 2 + 1, 6));
+          group.add(box(0.05, 1, 1.4, material(i ? '#24292f' : '#1f6feb'), x, base + 2.3, bz - bd / 2 + 1.7));
+        });
+        [-1, 1].forEach((side) => group.add(box(2.6, 0.7, 1, material('#e8dcc2'), side * 3, base + 0.55, bz - bd * 0.12)));
+      }
 
       // Floor slabs with a stair opening, plus the roof (also opened for rooftop access)
       const slabMaterial = material(isWarm ? '#d9c6ad' : '#c9ced6', { roughness: 0.7 });
@@ -448,9 +486,61 @@
       const hole = new THREE.Path();
       hole.absarc(0, 0, inner, 0, Math.PI * 2, true);
       ringShape.holes.push(hole);
-      const ringGeometry = new THREE.ExtrudeGeometry(ringShape, { depth: h * 0.7, bevelEnabled: false, curveSegments: 64 });
-      ringGeometry.rotateX(-Math.PI / 2);
-      group.add(mesh(ringGeometry, material('#f2f2f2', { roughness: 0.4 }), 0, -h / 2, 0));
+      // The Ring as it is: four floors behind floor-to-ceiling glass, a white
+      // canopy fin sticking out at every floor on both sides, and open offices
+      // (desks, pods, wood floors) you can see through the glass
+      const ringSlab = (r1, r2, depth) => {
+        const shape = new THREE.Shape();
+        shape.absarc(0, 0, r2, 0, Math.PI * 2, false);
+        const cut = new THREE.Path();
+        cut.absarc(0, 0, r1, 0, Math.PI * 2, true);
+        shape.holes.push(cut);
+        const geometry = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false, curveSegments: 96 });
+        geometry.rotateX(-Math.PI / 2);
+        return geometry;
+      };
+      const floorsCount = 4;
+      const storey = (h * 0.6) / floorsCount;
+      const finMaterial = material('#f7f7f5', { roughness: 0.35 });
+      const woodFloor = new THREE.MeshStandardMaterial({ map: repeated(PropKit.kit.plankTexture('#c8a27a'), 40, 2), roughness: 0.6 });
+      for (let f = 0; f <= floorsCount; f++) {
+        const y = -h / 2 + f * storey;
+        if (f < floorsCount) group.add(mesh(ringSlab(inner, outer, 0.35), woodFloor, 0, y, 0));
+        if (f > 0) {
+          group.add(mesh(ringSlab(outer, outer + 2.4, 0.22), finMaterial, 0, y - 0.1, 0));
+          group.add(mesh(ringSlab(inner - 2.4, inner, 0.22), finMaterial, 0, y - 0.1, 0));
+        }
+      }
+      // Office floors: rows of white desks with dark chairs around the whole ring
+      const perFloor = 72;
+      const desks = new THREE.InstancedMesh(new THREE.BoxGeometry(3.4, 0.08, 1.4).translate(0, 0.75, 0), material('#fafafa', { roughness: 0.4 }), perFloor * floorsCount);
+      const legs = new THREE.InstancedMesh(new THREE.BoxGeometry(3.2, 0.72, 0.08).translate(0, 0.36, 0), material('#b0b0b0', { metalness: 0.6, roughness: 0.3 }), perFloor * floorsCount);
+      const chairs = new THREE.InstancedMesh(new THREE.BoxGeometry(0.6, 1, 0.6).translate(0, 0.5, 0), material('#2b2b2b'), perFloor * floorsCount * 2);
+      const middle = (inner + outer) / 2;
+      let deskIndex = 0;
+      for (let f = 0; f < floorsCount; f++) {
+        for (let i = 0; i < perFloor; i++) {
+          const angle = (i / perFloor) * Math.PI * 2;
+          const y = -h / 2 + f * storey + 0.35;
+          matrix.makeRotationY(-angle).setPosition(Math.cos(angle) * middle, y, Math.sin(angle) * middle);
+          desks.setMatrixAt(deskIndex, matrix);
+          legs.setMatrixAt(deskIndex, matrix);
+          [-1, 1].forEach((side, k) => {
+            const r = middle + side * 1.1;
+            matrix.makeRotationY(-angle).setPosition(Math.cos(angle) * r, y, Math.sin(angle) * r);
+            chairs.setMatrixAt(deskIndex * 2 + k, matrix);
+          });
+          deskIndex += 1;
+        }
+      }
+      group.add(desks, legs, chairs);
+      // Stone cores between the office bays (stairs and elevators)
+      for (let i = 0; i < 8; i++) {
+        const angle = (i / 8) * Math.PI * 2 + Math.PI / 8;
+        const core = box(4, h * 0.6, (outer - inner) * 0.6, material('#e6e0d4', { roughness: 0.8 }), Math.cos(angle) * middle, -h / 2 + h * 0.3, Math.sin(angle) * middle);
+        core.rotation.y = -angle;
+        group.add(core);
+      }
       // Curved glass facades and the solar roof
       [outer + 0.05, inner - 0.05].forEach((radius) => {
         const facade = mesh(new THREE.CylinderGeometry(radius, radius, h * 0.6, 96, 1, true), material('#9fc5e8', { transparent: true, opacity: 0.55, roughness: 0.05, metalness: 0.7, side: THREE.DoubleSide }), 0, -h / 2 + h * 0.32, 0);
@@ -464,7 +554,7 @@
       roofShape.holes.push(roofHole);
       const roof = new THREE.ExtrudeGeometry(roofShape, { depth: 0.4, bevelEnabled: false, curveSegments: 64 });
       roof.rotateX(-Math.PI / 2);
-      group.add(mesh(roof, material('#b8c4cc', { roughness: 0.35, metalness: 0.5 }), 0, -h / 2 + h * 0.7, 0));
+      group.add(mesh(roof, material('#1f2a36', { roughness: 0.25, metalness: 0.7 }), 0, -h / 2 + h * 0.6 + 0.2, 0));
       // Inner park: meadow, pond and orchards
       group.add(cylinder(inner - 2, inner - 2, 0.2, material('#7cb342', { roughness: 1 }), 0, -h / 2 + 0.1, 0, 64));
       group.add(cylinder(inner * 0.3, inner * 0.3, 0.25, material('#4fc3f7', { roughness: 0.1, metalness: 0.2 }), inner * 0.2, -h / 2 + 0.15, -inner * 0.2, 32));
@@ -474,6 +564,14 @@
       const theater = new THREE.Group();
       theater.add(cylinder(7, 7, 4, material('#d6eaf8', { transparent: true, opacity: 0.45, roughness: 0.02, metalness: 0.6 }), 0, 2, 0, 48));
       theater.add(cylinder(7.6, 7.6, 0.6, material('#e5e7e9', { roughness: 0.3, metalness: 0.5 }), 0, 4.3, 0, 48));
+      // Inside: a pale stone floor and the two curved staircases down to the auditorium
+      theater.add(cylinder(6.8, 6.8, 0.1, material('#ece6da', { roughness: 0.6 }), 0, 0.06, 0, 48));
+      [0, Math.PI].forEach((start) => {
+        const stair = mesh(new THREE.TorusGeometry(4.6, 0.55, 6, 32, Math.PI * 0.8), material('#d8cfc0', { roughness: 0.7 }), 0, 0.3, 0);
+        stair.rotation.set(Math.PI / 2, 0, start);
+        theater.add(stair);
+      });
+      theater.add(cylinder(1.2, 1.2, 4, material('#d6eaf8', { transparent: true, opacity: 0.35, roughness: 0.02 }), 0, 2, 0, 24));
       const caption = textSprite('Steve Jobs Theater', { width: 10 });
       caption.position.y = 8;
       theater.add(caption);
@@ -498,14 +596,58 @@
         group.add(box(18.2, 0.8, 12.2, material(brand[index]), x, -h / 2 + 9, z));
         group.add(box(3, 9.02, 0.3, material(brand[(index + 1) % 4]), x - 6, -h / 2 + 4.5, z + 6.05));
       });
-      // Bay View: dragonscale canopy roofs
+      // Bay View: low glass halls under a roof of tent-like peaks covered in
+      // silver "dragonscale" solar panels, with clerestory windows between peaks
+      const scale = new THREE.MeshStandardMaterial({ map: repeated(windowsTexture('#9aa7b3', '#cfd8dc'), 3, 2), roughness: 0.25, metalness: 0.75, flatShading: true });
       for (let i = 0; i < 3; i++) {
-        const canopy = mesh(new THREE.ConeGeometry(11, 5, 4, 1), material(i % 2 ? '#b3e5fc' : '#e1f5fe', { roughness: 0.2, metalness: 0.4, flatShading: true }), w * 0.22 + (i % 2) * 6, -h / 2 + 8, -d * 0.05 + i * 13 - 8);
-        canopy.rotation.y = Math.PI / 4;
-        canopy.scale.set(1.2, 1, 0.8);
-        group.add(canopy);
-        group.add(box(18, 5.5, 10, material('#fafafa', { transparent: true, opacity: 0.8 }), w * 0.22 + (i % 2) * 6, -h / 2 + 2.75, -d * 0.05 + i * 13 - 8));
+        const cx = w * 0.22 + (i % 2) * 6;
+        const cz = -d * 0.05 + i * 13 - 8;
+        group.add(box(22, 4.6, 11, material('#e9f4fb', { transparent: true, opacity: 0.55, roughness: 0.05, metalness: 0.3 }), cx, -h / 2 + 2.3, cz));
+        group.add(box(22.4, 0.3, 11.4, material('#d7ccc8'), cx, -h / 2 + 4.7, cz));
+        for (let px = -1; px <= 1; px++) {
+          for (let pz = -0.5; pz <= 0.5; pz += 1) {
+            const peak = mesh(new THREE.ConeGeometry(4.6, 3.2, 4, 1), scale, cx + px * 7.2, -h / 2 + 6.4, cz + pz * 5.4);
+            peak.rotation.y = Math.PI / 4;
+            peak.scale.set(1.1, 1, 0.82);
+            group.add(peak);
+          }
+        }
       }
+      // Stan, the T. rex skeleton by the old campus, in bone white
+      const bone = material('#efe6d2', { roughness: 0.8 });
+      const rex = new THREE.Group();
+      for (let i = 0; i < 16; i++) {
+        const t = i / 15;
+        rex.add(sphere(0.32 - t * 0.12, bone, -3.6 + i * 0.55, 3.1 + Math.sin(t * Math.PI) * 0.5 - t * t * 1.4, 0, 6));
+      }
+      for (let i = 0; i < 7; i++) {
+        const rib = mesh(new THREE.TorusGeometry(0.75 - i * 0.05, 0.05, 4, 12, Math.PI), bone, -1.6 + i * 0.36, 3.1, 0);
+        rib.rotation.set(0, Math.PI / 2, Math.PI);
+        rex.add(rib);
+      }
+      rex.add(box(1.6, 0.8, 0.6, bone, -4.4, 3.9, 0));
+      rex.add(box(1.2, 0.25, 0.5, bone, -4.6, 3.35, 0));
+      [-0.45, 0.45].forEach((side) => {
+        rex.add(cylinder(0.14, 0.12, 2.4, bone, -0.8, 1.6, side, 6));
+        rex.add(box(0.8, 0.15, 0.3, bone, -1.1, 0.25, side));
+        rex.add(cylinder(0.05, 0.05, 0.7, bone, -2.6, 2.6, side * 0.6, 4));
+      });
+      rex.add(box(3, 0.3, 1.6, material('#9e9e9e'), -0.8, 0.15, 0));
+      rex.position.set(-w * 0.12, -h / 2, d * 0.32);
+      rex.rotation.y = 0.4;
+      group.add(rex);
+      // The green Android robot statue on the lawn
+      const android = new THREE.Group();
+      const robot = material('#3ddc84', { roughness: 0.5 });
+      android.add(cylinder(1.1, 1.1, 1.8, robot, 0, 1.9, 0, 20));
+      const head = mesh(new THREE.SphereGeometry(1.1, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2), robot, 0, 2.95, 0);
+      android.add(head);
+      [-0.4, 0.4].forEach((x) => android.add(sphere(0.12, material('#ffffff'), x, 3.45, 0.95, 8)));
+      [-0.55, 0.55].forEach((x) => { const antenna = cylinder(0.06, 0.06, 0.6, robot, x, 4.15, 0, 6); antenna.rotation.z = -x * 0.8; android.add(antenna); });
+      [-1.45, 1.45].forEach((x) => android.add(cylinder(0.28, 0.28, 1.4, robot, x, 2.1, 0, 10)));
+      [-0.45, 0.45].forEach((x) => android.add(cylinder(0.3, 0.3, 1, robot, x, 0.6, 0, 10)));
+      android.position.set(w * 0.05, -h / 2, d * 0.36);
+      group.add(android);
       // Colorful bikes, volleyball court, wordmark sign
       // Colorful campus bikes: two wheels, a frame and handlebars each
       const bikeCount = 24;
@@ -558,6 +700,15 @@
       sign.position.set(-w * 0.3, -h / 2, d * 0.38);
       group.add(sign);
       parkingLot(group, w * 0.45, d * 0.25, w * 0.2, d * 0.3, 9);
+      // Hacker Square: the courtyard of the Classic Campus, with HACK written
+      // in giant letters on the pavement, ringed by low "Main Street" buildings
+      const square = box(w * 0.32, 0.12, d * 0.22, material('#d7d2c8', { roughness: 0.9 }), -w * 0.18, -h / 2 + 0.12, d * 0.22);
+      group.add(square);
+      const hack = box(w * 0.28, 0.02, d * 0.12, new THREE.MeshBasicMaterial({ map: labelTexture('HACK', { bg: '#d7d2c8', fg: '#8a8578', width: 1024, height: 360, font: 'bold 300px Segoe UI, Arial, sans-serif' }) }), -w * 0.18, -h / 2 + 0.2, d * 0.22);
+      group.add(hack);
+      [['#c8b89a', -0.33], ['#9fb3c8', -0.03], ['#d6c4a8', -0.2]].forEach(([wall, x], index) => {
+        group.add(box(w * 0.08, 5 + index, 4, new THREE.MeshStandardMaterial({ map: repeated(windowsTexture(wall, '#cfe8ff'), 2, 2), roughness: 0.6 }), w * x, -h / 2 + 2.5 + index / 2, d * 0.22 + (index === 2 ? d * 0.14 : -d * 0.14)));
+      });
       const caption = textSprite('Meta — MPK 20', { width: 14 });
       caption.position.y = h + 6;
       group.add(caption);

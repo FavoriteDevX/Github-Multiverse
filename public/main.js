@@ -330,9 +330,29 @@ async function loadUniverse() {
   City.finalize();
   renderWorldList();
   worldFullyLoaded = true;
+  sharpenTextures();
   DistanceCulling.prepare();
   Quality.refresh();
   FireLights.init(scene);
+}
+
+// Anisotropic filtering: stone, brick, wood and grass stay sharp when seen at
+// a grazing angle (the ground no longer blurs a few meters ahead)
+function sharpenTextures() {
+  const level = Quality.level();
+  if (level === 0) return;
+  const anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), level >= 2 ? 8 : 4);
+  const seen = new Set();
+  scene.traverse((node) => {
+    const materials = node.material ? (Array.isArray(node.material) ? node.material : [node.material]) : [];
+    materials.forEach((material) => ['map', 'normalMap', 'roughnessMap', 'bumpMap', 'aoMap'].forEach((slot) => {
+      const texture = material[slot];
+      if (!texture || seen.has(texture) || texture.anisotropy >= anisotropy || texture.isVideoTexture) return;
+      seen.add(texture);
+      texture.anisotropy = anisotropy;
+      texture.needsUpdate = true;
+    }));
+  });
 }
 
 let resolvePlazaReady = () => {};
@@ -656,8 +676,23 @@ function create3DMousePointerMesh(hexagonalColor) {
   arrowMesh.castShadow = true;
   arrowMesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(arrowGeometry, 30), new THREE.LineBasicMaterial({ color: 0x1d1b26 })));
 
+  // The "clicking hand" (like the OS pointer over a link): shown instead of
+  // the arrow while the mouse is over something that can be clicked
+  const hand = [[0.12, 0], [0.4, 0], [0.4, -0.6], [0.52, -0.56], [0.66, -0.6], [0.66, -0.68], [0.8, -0.64], [0.94, -0.7], [0.94, -0.78], [1.06, -0.76], [1.18, -0.84], [1.18, -1.4], [1.02, -1.86], [0.28, -1.86], [0.04, -1.5], [-0.3, -1.12], [-0.3, -0.94], [-0.12, -0.9], [0.12, -1.04]];
+  const handShape = new THREE.Shape();
+  handShape.moveTo(hand[0][0], hand[0][1]);
+  hand.slice(1).forEach(([x, y]) => handShape.lineTo(x, y));
+  handShape.closePath();
+  const handGeometry = new THREE.ExtrudeGeometry(handShape, { depth: 0.22, bevelEnabled: true, bevelThickness: 0.05, bevelSize: 0.05, bevelSegments: 2 });
+  handGeometry.translate(-0.26, 0, -0.11);
+  const handMesh = new THREE.Mesh(handGeometry, arrowMesh.material);
+  handMesh.castShadow = true;
+  handMesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(handGeometry, 30), new THREE.LineBasicMaterial({ color: 0x1d1b26 })));
+  handMesh.visible = false;
+
   const arrowPivot = new THREE.Group();
   arrowPivot.add(arrowMesh);
+  arrowPivot.add(handMesh);
   arrowPivot.position.y = 0.25;
   pointerGroup.add(arrowPivot);
 
@@ -668,6 +703,7 @@ function create3DMousePointerMesh(hexagonalColor) {
 
   pointerGroup.userData.arrowPivot = arrowPivot;
   pointerGroup.userData.arrowMesh = arrowMesh;
+  pointerGroup.userData.handMesh = handMesh;
   pointerGroup.userData.ring = ringMesh;
   pointerGroup.scale.setScalar(1.1);
   pointerGroup.traverse((node) => { node.raycast = () => {}; });
@@ -860,7 +896,13 @@ function bindInputEvents() {
     pointerInsideCanvas = false;
     ui.tooltip.style.display = 'none';
   });
-  canvas.addEventListener('pointerdown', (event) => { pointerDownAt = { x: event.clientX, y: event.clientY }; });
+  canvas.addEventListener('pointerdown', (event) => {
+    pointerDownAt = { x: event.clientX, y: event.clientY };
+    if (event.button !== 0 || !lastHoverPoint || !localCursor) return;
+    const color = localCursor.mesh.userData.arrowMesh.material.color.getHex();
+    spawnClickRipple(lastHoverPoint, color, localCursor.hand);
+    if (localCursor.hand) { localCursor.pressAt = performance.now(); Sound.play('click'); }
+  });
   canvas.addEventListener('pointerup', (event) => {
     if (!pointerDownAt) return;
     const dragDistance = Math.hypot(event.clientX - pointerDownAt.x, event.clientY - pointerDownAt.y);
@@ -989,14 +1031,46 @@ function findLabeledAncestor(object) {
   return null;
 }
 
+// Over something clickable the avatar becomes a pointing hand (wearables step
+// aside while it points); a click presses it and leaves a ripple where it landed
+function setCursorHand(record, on) {
+  if (!record || record.hand === on) return;
+  record.hand = on;
+  const { arrowPivot, arrowMesh, handMesh } = record.mesh.userData;
+  arrowPivot.children.forEach((child) => { child.visible = child === handMesh ? on : !on; });
+  arrowMesh.visible = !on;
+}
+const clickRipples = [];
+function spawnClickRipple(point, color, big) {
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.3, 0.42, 40), new THREE.MeshBasicMaterial({ color: new THREE.Color(color), transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false }));
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.copy(point).add(new THREE.Vector3(0, 0.06, 0));
+  ring.raycast = () => {};
+  scene.add(ring);
+  clickRipples.push({ ring, start: performance.now(), size: big ? 3.2 : 1.8 });
+}
+function updateClickRipples() {
+  for (let i = clickRipples.length - 1; i >= 0; i--) {
+    const ripple = clickRipples[i];
+    const t = (performance.now() - ripple.start) / 650;
+    if (t >= 1) { scene.remove(ripple.ring); ripple.ring.geometry.dispose(); ripple.ring.material.dispose(); clickRipples.splice(i, 1); continue; }
+    ripple.ring.scale.setScalar(1 + t * ripple.size);
+    ripple.ring.material.opacity = 0.9 * (1 - t);
+  }
+}
+let lastHoverPoint = null;
+
 function updateLocalCursorFromPointer() {
-  if (!pointerInsideCanvas || !pointerDirty) return;
+  if (!pointerInsideCanvas) { setCursorHand(localCursor, false); return; }
+  if (!pointerDirty) return;
   pointerDirty = false;
   raycaster.setFromCamera(pointerNDC, camera);
   const hit = raycaster.intersectObjects(City.pickables, true).find((candidate) => candidate.object.visible && !(candidate.object.material && candidate.object.material.opacity < 0.1));
   hoveredObject = hit ? hit.object : null;
   const labeled = hoveredObject ? findLabeledAncestor(hoveredObject) : null;
   renderer.domElement.style.cursor = hit ? (labeled ? 'pointer' : 'none') : 'default';
+  lastHoverPoint = hit ? hit.point.clone() : null;
+  setCursorHand(localCursor, Boolean(labeled));
   if (labeled) {
     ui.tooltip.textContent = labeled.userData.label;
     ui.tooltip.style.display = 'block';
@@ -1710,6 +1784,7 @@ function worldCovered() {
 function animate() {
   requestAnimationFrame(animate);
   if (worldCovered()) { clock.getDelta(); return; }
+  updateClickRipples();
   const frameSeconds = Math.min(clock.getDelta(), 0.25);
   Quality.sample(frameSeconds);
   const deltaSeconds = Math.min(frameSeconds, 0.1);
@@ -1797,6 +1872,11 @@ function animate() {
     else if (emote === 'clap') pivot.scale.setScalar(1 + Math.abs(Math.sin(elapsed * 12)) * 0.15);
     else if (emote === 'think') pivot.rotation.z = 0.25;
     else if (emote === 'sit') pivot.position.y = 1.2;
+    // Click: the hand dips and squashes like a finger pressing a mouse button
+    if (record.pressAt) {
+      const press = (performance.now() - record.pressAt) / 220;
+      if (press < 1) { const k = Math.sin(Math.PI * press); pivot.position.y -= 0.45 * k; pivot.rotation.x = -0.4 * k; pivot.scale.set(1 + 0.08 * k, 1 - 0.2 * k, 1); } else record.pressAt = 0;
+    }
     projectToScreen(record);
   });
 
