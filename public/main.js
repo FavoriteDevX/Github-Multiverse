@@ -258,6 +258,115 @@ const DistanceCulling = (() => {
 })();
 
 // ============================================================================
+// TREE LOD: THOUSANDS OF REALISTIC TREES WITHOUT DRAWING THEM ALL
+// ============================================================================
+// Every forest was one InstancedMesh: the GPU drew all of its trees every
+// frame, even far away or behind the camera (two thirds of all triangles).
+// Once the world is built, the trees are regrouped in 64 m chunks: chunks
+// outside the view are skipped, nearby chunks show the full tree and distant
+// ones a light silhouette (a few triangles) in the same place.
+const TreeLOD = (() => {
+  const CELL = 96;
+  const NEAR = [55, 80, 110, 160];
+  const chunks = [];
+  const frustum = new THREE.Frustum();
+  const viewProjection = new THREE.Matrix4();
+  const testSphere = new THREE.Sphere();
+  const farGeometries = {};
+  const farMaterials = {};
+  const FAR_COLORS = { green: '#5b7d3a', blossom: '#e3a6c2', autumn: '#c47a36' };
+  function farGeometry(kind) {
+    if (!farGeometries[kind]) {
+      farGeometries[kind] = kind === 'pine'
+        ? new THREE.ConeGeometry(2.6, 7.2, 6, 1).translate(0, 4.8, 0)
+        : new THREE.IcosahedronGeometry(3, 0).scale(1, 0.85, 1).translate(0, 5.8, 0);
+    }
+    return farGeometries[kind];
+  }
+  function farMaterial(material, kind) {
+    const variant = kind === 'pine' ? 'pine' : (material.userData.variant || 'green');
+    if (!farMaterials[variant]) farMaterials[variant] = new THREE.MeshLambertMaterial({ color: variant === 'pine' ? '#4d6b45' : FAR_COLORS[variant] || FAR_COLORS.green, flatShading: true });
+    return farMaterials[variant];
+  }
+  function prepare() {
+    const sources = [];
+    // Trees anywhere, plus the big static instanced sets of the city (houses,
+    // lamps, fences...) that sit right in the scene; never anything animated
+    const animated = new Set(PropKit.animatedObjects);
+    scene.traverse((node) => {
+      if (!node.isInstancedMesh || node.userData.lodChunk || node.userData.noChunk || node.count <= 0 || animated.has(node)) return;
+      if (node.geometry.userData.treeKind || (node.parent === scene && node.count >= 120 && !node.userData.animate)) sources.push(node);
+    });
+    const local = new THREE.Matrix4();
+    const position = new THREE.Vector3();
+    const color = new THREE.Color();
+    sources.forEach((source) => {
+      source.updateMatrixWorld(true);
+      const cells = new Map();
+      for (let i = 0; i < source.count; i++) {
+        source.getMatrixAt(i, local);
+        const world = new THREE.Matrix4().multiplyMatrices(source.matrixWorld, local);
+        position.setFromMatrixPosition(world);
+        const key = `${Math.floor(position.x / CELL)},${Math.floor(position.z / CELL)}`;
+        if (!cells.has(key)) cells.set(key, []);
+        cells.get(key).push({ world, index: i });
+      }
+      const kind = source.geometry.userData.treeKind;
+      cells.forEach((list) => {
+        const near = new THREE.InstancedMesh(source.geometry, source.material, list.length);
+        // Trees get a light far version; other sets simply stop at the view distance
+        const far = kind ? new THREE.InstancedMesh(farGeometry(kind), farMaterial(source.material, kind), list.length) : near;
+        const center = new THREE.Vector3();
+        list.forEach(({ world, index }, i) => {
+          near.setMatrixAt(i, world);
+          far.setMatrixAt(i, world);
+          if (source.instanceColor) { source.getColorAt(index, color); near.setColorAt(i, color); }
+          center.add(position.setFromMatrixPosition(world));
+        });
+        center.divideScalar(list.length);
+        let radius = 0;
+        list.forEach(({ world }) => { radius = Math.max(radius, position.setFromMatrixPosition(world).distanceTo(center)); });
+        center.y += 5;
+        [near, far].forEach((instanced) => {
+          instanced.frustumCulled = false;
+          instanced.matrixAutoUpdate = false;
+          instanced.userData.lodChunk = true;
+          instanced.userData.alwaysVisible = true;
+          if (kind) instanced.raycast = () => {};
+          instanced.visible = false;
+        });
+        near.castShadow = source.castShadow;
+        near.receiveShadow = source.receiveShadow || Boolean(kind);
+        if (far !== near) { far.castShadow = false; scene.add(far); }
+        scene.add(near);
+        chunks.push({ near, far, center, radius: radius + 10 });
+      });
+      // The original stays (hidden) so collisions with tree trunks keep working
+      source.visible = false;
+      source.userData.alwaysVisible = true;
+      source.userData.lodSource = true;
+    });
+  }
+  // Every frame: only the chunks in front of the camera, full trees up close
+  function update() {
+    if (!chunks.length) return;
+    viewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    frustum.setFromProjectionMatrix(viewProjection);
+    const near = NEAR[Quality.level()];
+    const far = Math.min(scene.fog ? scene.fog.far : 900, window.MULTIVERSE_VIEW_CAP || 900);
+    for (const chunk of chunks) {
+      const distance = chunk.center.distanceTo(camera.position) - chunk.radius;
+      testSphere.set(chunk.center, chunk.radius + 6);
+      const inView = distance < far && frustum.intersectsSphere(testSphere);
+      if (chunk.far === chunk.near) { chunk.near.visible = inView; continue; }
+      chunk.near.visible = inView && distance < near;
+      chunk.far.visible = inView && distance >= near;
+    }
+  }
+  return { prepare, update, count: () => chunks.length };
+})();
+
+// ============================================================================
 // ENGINE BOOTSTRAP
 // ============================================================================
 function initEngine() {
@@ -336,6 +445,7 @@ async function loadUniverse() {
   renderWorldList();
   worldFullyLoaded = true;
   sharpenTextures();
+  TreeLOD.prepare();
   DistanceCulling.prepare();
   Quality.refresh();
   FireLights.init(scene);
@@ -971,7 +1081,7 @@ function bindInputEvents() {
     if (window.SceneBuilder && SceneBuilder.handleKey(event)) return;
     // Shift+U: hide every overlay and keep only the scenery (screenshot mode)
     if (event.key === 'U') { document.body.classList.toggle('hide-ui'); return; }
-    if (event.key === 'Escape') { closeInfoCard(); closeStream(); Cafe.close(); document.getElementById('mvc-store').style.display = 'none'; }
+    if (event.key === 'Escape') { CommunityPortals.close(); closeInfoCard(); closeStream(); Cafe.close(); document.getElementById('mvc-store').style.display = 'none'; }
     // M: the Genesis City map (top view of every parcel); from the 3D overhead view, M walks again
     if (event.key.toLowerCase() === 'm') { if (viewMode === 'map') setViewMode('explore'); else CityMap.toggle(); return; }
     if (event.key.toLowerCase() === 'v') { appendSystemMessage(VideoScreens.toggleSound() ? 'Video screens: sound ON (press V to mute).' : 'Video screens muted (press V for sound).'); return; }
@@ -1854,6 +1964,7 @@ function animate() {
   LootSystem.update(elapsed, deltaSeconds);
   if (viewMode === 'explore') Prank.update(avatar.position);
   Interactions.update(avatar.position, !!avatar.moving);
+  CommunityPortals.update(avatar.position);
   // District titles fade out when the camera gets close, so they never block the view
   City.districts.forEach((district) => {
     const titlePosition = district.title.getWorldPosition(new THREE.Vector3());
@@ -1912,6 +2023,8 @@ function animate() {
   // third frame for things that move (instead of every single frame)
   shadowFrame += 1;
   if (sunMoved || shadowFrame % 3 === 0) renderer.shadowMap.needsUpdate = true;
+  camera.updateMatrixWorld();
+  TreeLOD.update();
   renderer.render(scene, camera);
   VideoScreens.update(camera, avatar.position, () => City.collidablesAt(avatar.position.x, avatar.position.z));
   if (restoreCamera) camera.position.copy(restoreCamera);
@@ -2122,6 +2235,7 @@ Promise.all([launched, universeReady]).then(([launch]) => {
   const session = launch.session;
   if (Auth.hasServer) socket = io({ auth: { token: session.token, lobby: lobbyId } });
   setupNetwork(session);
+  CommunityPortals.connect(socket, { system: appendSystemMessage });
   enterFromLauncher(launch.entry);
   // First time only: customize the cursor before entering (Decentraland-style).
   // A look saved in this browser or in the account (server) skips it.

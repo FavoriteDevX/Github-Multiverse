@@ -597,6 +597,56 @@ io.use((socket, next) => {
 });
 
 // This manages every developer that connects to your multiverse environment cluster
+// ----------------------------------------------------------------------------
+// Community Portals: six totems behind the Genesis Plaza spawn that any dev can
+// rent for 24 hours (100 MVC) to show a project: title, short description,
+// author and an https link. Slots live in memory and in data/community-portals.json
+// and every change is broadcast to all players.
+// ----------------------------------------------------------------------------
+const PORTAL_SLOTS = 6;
+const PORTAL_PRICE = 100;
+const PORTAL_DURATION_MS = 24 * 60 * 60 * 1000;
+const PORTALS_FILE = path.join(DATA_DIR, 'community-portals.json');
+let communityPortals = Array.from({ length: PORTAL_SLOTS }, () => null);
+try {
+  const saved = JSON.parse(fs.readFileSync(PORTALS_FILE, 'utf8'));
+  if (Array.isArray(saved)) communityPortals = Array.from({ length: PORTAL_SLOTS }, (unused, i) => saved[i] || null);
+} catch (error) { /* no portals yet */ }
+function savePortals() {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFile(PORTALS_FILE, JSON.stringify(communityPortals), (error) => { if (error) console.error('[PORTALS] Could not save:', error.message); });
+}
+// Frees the slots whose 24 hours are over; returns true when something changed
+function expirePortals() {
+  let changed = false;
+  communityPortals = communityPortals.map((slot) => {
+    if (slot && slot.expiresAt <= Date.now()) { changed = true; return null; }
+    return slot;
+  });
+  if (changed) savePortals();
+  return changed;
+}
+function publicPortals() {
+  expirePortals();
+  return communityPortals.map((slot) => slot && { title: slot.title, description: slot.description, url: slot.url, host: slot.host, author: slot.author, expiresAt: slot.expiresAt });
+}
+// Only plain https links to public hosts: no credentials, no local or private
+// addresses, no raw IPs and no known IP-logger or link-hiding services
+const PORTAL_BLOCKED_HOSTS = /(^|\.)(grabify\.link|iplogger\.(org|com|ru|co)|2no\.co|yip\.su|blasze\.com|ps3cfw\.com|bit\.ly|tinyurl\.com|t\.co|is\.gd|cutt\.ly|shorturl\.at|rb\.gy)$/i;
+function validatePortalUrl(raw) {
+  if (typeof raw !== 'string' || raw.length > 200) return { error: 'The URL must have at most 200 characters.' };
+  let url;
+  try { url = new URL(raw.trim()); } catch (error) { return { error: 'That is not a valid URL.' }; }
+  if (url.protocol !== 'https:') return { error: 'Only https:// links are accepted.' };
+  if (url.username || url.password) return { error: 'Links with a username or password are not accepted.' };
+  const host = url.hostname.toLowerCase();
+  if (!host.includes('.') || /^[\d.]+$/.test(host) || host.includes(':') || /(^|\.)(localhost|local|internal|lan|home|test|example|invalid)$/.test(host)) return { error: 'Use the public address of the site (no local or IP addresses).' };
+  if (PORTAL_BLOCKED_HOSTS.test(host)) return { error: 'Link shorteners and IP loggers are not accepted: use the real address of the site.' };
+  if (url.port && url.port !== '443') return { error: 'Use the standard https port.' };
+  return { url: url.href, host };
+}
+setInterval(() => { if (expirePortals()) io.emit('portals_state', publicPortals()); }, 60 * 1000);
+
 io.on('connection', (socket) => {
   const account = accounts.users[socket.data.userKey];
   const developerTag = account.username;
@@ -623,6 +673,32 @@ io.on('connection', (socket) => {
   socket.emit('game_state', publicGameState());
   socket.emit('loot_spawns', publicLoot());
   socket.emit('tech_feeds', TechFeeds.snapshot());
+  socket.emit('portals_state', publicPortals());
+  socket.on('portals_list', (ack) => { if (typeof ack === 'function') ack(publicPortals()); });
+  // Rent a free portal for 24 h: validated text and link, 100 MVC from the balance
+  socket.on('portal_rent', (payload = {}, ack) => {
+    const reply = typeof ack === 'function' ? ack : () => {};
+    const renter = accounts.users[socket.data.userKey];
+    if (!renter) return reply({ error: 'Sign in again to rent a portal.' });
+    const slot = Number(payload && payload.slot);
+    if (!Number.isInteger(slot) || slot < 0 || slot >= PORTAL_SLOTS) return reply({ error: 'Unknown portal.' });
+    expirePortals();
+    if (communityPortals[slot]) return reply({ error: 'This portal was just rented by someone else.' });
+    const title = cleanText(payload.title, 30);
+    const description = cleanText(payload.description, 80);
+    if (!title) return reply({ error: 'Give your project a title.' });
+    if (!description) return reply({ error: 'Add a short description.' });
+    const link = validatePortalUrl(payload.url);
+    if (link.error) return reply({ error: link.error });
+    if (walletOf(renter) < PORTAL_PRICE) return reply({ error: `You need ${PORTAL_PRICE} MVC (you have ${walletOf(renter)}).` });
+    renter.coins = walletOf(renter) - PORTAL_PRICE;
+    saveAccounts();
+    communityPortals[slot] = { title, description, url: link.url, host: link.host, author: renter.username, ownerKey: socket.data.userKey, rentedAt: Date.now(), expiresAt: Date.now() + PORTAL_DURATION_MS };
+    savePortals();
+    socket.emit('wallet', { coins: renter.coins, spent: PORTAL_PRICE, reason: 'Community Portal (24 h)' });
+    io.emit('portals_state', publicPortals());
+    reply({ ok: true, coins: renter.coins });
+  });
   socket.to(room).emit('new_developer_joined', activeDevelopers[socket.id]);
 
   const developer = () => activeDevelopers[socket.id];

@@ -41,26 +41,31 @@
   }
 
   // Instanced low-poly trees scattered inside a rectangle (skips optional holes)
+  // Campus trees: the same realistic leafy trees as Genesis City (bark, layered
+  // crowns and leaf cards), instanced; coast live oaks in green, a share of
+  // blossoming trees where the palette asks for pink (the Apple Park orchards)
   function scatterTrees(group, count, width, depth, seed, { y = 0, avoid = null, palette = ['#2e7d32', '#388e3c', '#43a047', '#558b2f'], scale = 1 } = {}) {
     const random = seededRandom(seed);
-    const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.2, 0.3, 1, 6).translate(0, 0.5, 0), material('#6d4c41'), count);
-    const crowns = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0), material('#ffffff', { flatShading: true }), count);
+    const blossoms = palette.some((color) => /^#f[0-9a-f]8/i.test(color) || /f48fb1|f8bbd0|ec407a/i.test(color));
+    const geometry = PropKit.kit.realisticTreeGeometry('broadleaf');
+    const green = new THREE.InstancedMesh(geometry, PropKit.kit.treeMaterial('green'), count);
+    const pink = blossoms ? new THREE.InstancedMesh(geometry, PropKit.kit.treeMaterial('blossom'), count) : null;
+    let greens = 0;
+    let pinks = 0;
     let placed = 0;
     for (let attempt = 0; attempt < count * 4 && placed < count; attempt++) {
       const x = (random() - 0.5) * width;
       const z = (random() - 0.5) * depth;
       if (avoid && avoid(x, z)) continue;
-      const size = (0.8 + random() * 0.8) * scale;
-      matrix.compose(positionVector.set(x, y, z), quaternion.identity(), scaleVector.set(size, size * 2.4, size));
-      trunks.setMatrixAt(placed, matrix);
-      matrix.compose(positionVector.set(x, y + size * 3, z), quaternion.identity(), scaleVector.set(size * 1.6, size * 1.8, size * 1.6));
-      crowns.setMatrixAt(placed, matrix);
-      crowns.setColorAt(placed, tint.set(palette[Math.floor(random() * palette.length)]));
+      const size = (0.75 + random() * 0.55) * scale;
+      quaternion.setFromAxisAngle(positionVector.set(0, 1, 0), random() * Math.PI * 2);
+      matrix.compose(positionVector.set(x, y, z), quaternion, scaleVector.set(size, size * (0.9 + random() * 0.25), size));
+      if (pink && random() < 0.3) pink.setMatrixAt(pinks++, matrix);
+      else green.setMatrixAt(greens++, matrix);
       placed++;
     }
-    trunks.count = placed;
-    crowns.count = placed;
-    [trunks, crowns].forEach((instanced) => { instanced.castShadow = true; instanced.receiveShadow = true; group.add(instanced); });
+    green.count = greens;
+    [green, pink].filter(Boolean).forEach((instanced) => { if (instanced === pink) instanced.count = pinks; instanced.castShadow = true; instanced.receiveShadow = true; group.add(instanced); });
   }
 
   // Parking lot full of instanced cars
@@ -761,6 +766,100 @@
       group.add(caption);
     },
 
+    // The Bay Area around the campus: golden-green foothills of the Santa Cruz
+    // Mountains to the west and south, the San Francisco Bay to the north with
+    // its colored salt ponds along the shore, and US-101 with traffic between
+    bayArea(group, { w, d }) {
+      const random = seededRandom(1849);
+      // Foothills: a displaced strip, green in the folds and golden on the crests
+      const hills = (length, depthOut, x, z, rotation) => {
+        const geometry = new THREE.PlaneGeometry(length, depthOut, 90, 24);
+        geometry.rotateX(-Math.PI / 2);
+        const position = geometry.attributes.position;
+        const colors = [];
+        const low = new THREE.Color('#5f7f3c');
+        const high = new THREE.Color('#c9a75c');
+        const oak = new THREE.Color('#3f5a2a');
+        for (let i = 0; i < position.count; i++) {
+          const px = position.getX(i);
+          const pz = position.getZ(i);
+          const away = (pz + depthOut / 2) / depthOut; // 0 at the campus edge, 1 far away
+          const ridge = Math.sin(px * 0.018 + 1.3) * 0.5 + Math.sin(px * 0.047 + pz * 0.02) * 0.3 + Math.sin(px * 0.11 - pz * 0.07) * 0.12;
+          const height = Math.max(0, away * away * (48 + ridge * 30) + ridge * 6 * away);
+          position.setY(i, height - 0.4);
+          const t = Math.min(1, height / 55);
+          const c = low.clone().lerp(high, t * 0.85);
+          if (Math.sin(px * 0.3 + pz * 0.21) > 0.55 && t < 0.7) c.lerp(oak, 0.6); // oak groves in the folds
+          colors.push(c.r, c.g, c.b);
+        }
+        geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+        geometry.computeVertexNormals();
+        const strip = mesh(geometry, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }), x, 0, z);
+        strip.rotation.y = rotation;
+        strip.receiveShadow = true;
+        strip.userData.alwaysVisible = true;
+        group.add(strip);
+      };
+      hills(w + 420, 260, 0, d / 2 + 130, Math.PI);          // south
+      hills(d + 420, 260, -w / 2 - 130, 0, -Math.PI / 2);   // west
+      // San Francisco Bay to the north, with salt ponds in their real colors
+      const bay = box(w + 600, 0.2, 320, material('#4f86a8', { roughness: 0.15, metalness: 0.3 }), 0, -0.35, -d / 2 - 175);
+      bay.userData.alwaysVisible = true;
+      group.add(bay);
+      const pondColors = ['#c0504d', '#d9826b', '#b5713a', '#7fa98a', '#c98aa6', '#8f6a4a', '#5f9e9b'];
+      let px = -w / 2 - 60;
+      while (px < w / 2 + 60) {
+        const pw = 28 + random() * 40;
+        const pd = 22 + random() * 26;
+        group.add(box(pw, 0.12, pd, material(pondColors[Math.floor(random() * pondColors.length)], { roughness: 0.4 }), px + pw / 2, -0.2, -d / 2 - 40 - pd / 2 - random() * 10));
+        group.add(box(pw + 1.2, 0.3, 1.2, material('#a89f8a'), px + pw / 2, -0.15, -d / 2 - 38));
+        px += pw + 2;
+      }
+      // US-101: six lanes with traffic, between the campus and the bay
+      const roadZ = -d / 2 - 18;
+      const road = box(w + 260, 0.1, 22, new THREE.MeshStandardMaterial({ map: repeated(PropKit.kit.asphaltTexture ? PropKit.kit.asphaltTexture() : windowsTexture('#3a3d42', '#3a3d42'), 40, 2), roughness: 0.9 }), 0, 0.02, roadZ);
+      group.add(road);
+      group.add(box(w + 260, 0.6, 0.6, material('#c9c9c9'), 0, 0.3, roadZ));
+      const lanes = [-8, -4.5, -1.5, 1.5, 4.5, 8];
+      const length = w + 240;
+      const perLane = 14;
+      const cars = new THREE.InstancedMesh(new THREE.BoxGeometry(4.3, 1.4, 1.9).translate(0, 0.75, 0), material('#ffffff', { roughness: 0.25, metalness: 0.5 }), lanes.length * perLane);
+      const carColors = ['#f2f2f2', '#1b1b1b', '#9aa1a8', '#b3261e', '#22446e', '#c7c9cc', '#3c3c3c'];
+      const starts = [];
+      for (let i = 0; i < cars.count; i++) { starts.push(random() * length); cars.setColorAt(i, tint.set(carColors[i % carColors.length])); }
+      cars.castShadow = true;
+      group.add(cars);
+      animate(cars, (time) => {
+        for (let i = 0; i < cars.count; i++) {
+          const lane = i % lanes.length;
+          const direction = lane < 3 ? 1 : -1;
+          const travel = (starts[i] + time * (16 + (i % 4) * 3)) % length;
+          matrix.makeRotationY(direction > 0 ? 0 : Math.PI).setPosition(direction > 0 ? -length / 2 + travel : length / 2 - travel, 0, roadZ + lanes[lane]);
+          cars.setMatrixAt(i, matrix);
+        }
+        cars.instanceMatrix.needsUpdate = true;
+      });
+      for (let x = -w / 2; x <= w / 2; x += 110) {
+        const shield = new THREE.Group();
+        shield.add(box(0.25, 5, 0.25, material('#7f8c8d'), 0, 2.5, 0));
+        shield.add(facedBox(2.6, 2.6, 0.15, material('#ffffff'), new THREE.MeshBasicMaterial({ map: labelTexture('101', { bg: '#ffffff', fg: '#111111', border: '#111111', width: 256, height: 256, font: 'bold 110px Arial, sans-serif' }) }), 0, 5.6, 0));
+        shield.position.set(x, 0, roadZ + 12.5);
+        group.add(shield);
+      }
+      // Rows of palms and oaks along the boulevards beside the freeway
+      const palms = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.18, 0.28, 9, 6).translate(0, 4.5, 0), material('#8d7a5f'), 40);
+      const fronds = new THREE.InstancedMesh(new THREE.ConeGeometry(2.6, 1.6, 8, 1, true).translate(0, 9.2, 0), material('#4f7a35', { side: THREE.DoubleSide, flatShading: true }), 40);
+      for (let i = 0; i < 40; i++) {
+        matrix.makeRotationY(i).setPosition(-w / 2 + 10 + i * (w - 20) / 39, 0, roadZ + 15.5);
+        palms.setMatrixAt(i, matrix);
+        fronds.setMatrixAt(i, matrix);
+      }
+      group.add(palms, fronds);
+      const caption = textSprite('San Francisco Bay', { width: 18 });
+      caption.position.set(0, 14, -d / 2 - 120);
+      group.add(caption);
+    },
+
     stanfordCampus(group, { w, h, d }) {
       const sandstone = material('#e0c9a6', { roughness: 0.9 });
       const tile = material('#b7472a', { flatShading: true });
@@ -899,6 +998,7 @@
     [/oracle_campus/, 'oracleCampus'],
     [/ea_campus/, 'eaCampus'],
     [/stanford_campus/, 'stanfordCampus'],
+    [/bay_area/, 'bayArea'],
     [/hp_garage/, 'hpGarage'],
     [/vc_row/, 'vcRow'],
     [/hangar/, 'hangar'],

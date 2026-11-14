@@ -1407,6 +1407,20 @@
    ],
    "color": "#e9ecf2",
    "label": "Genesis spawn hub"
+  },
+  {
+   "type": "community_portals",
+   "position": [
+    -62,
+    0,
+    42
+   ],
+   "scale": [
+    44,
+    4,
+    44
+   ],
+   "label": "Community Portals"
   }
  ]
 }

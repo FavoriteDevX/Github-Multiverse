@@ -192,6 +192,8 @@ const City = (() => {
       scene.add(instanced);
     });
     edging = { spots: grassSpots, edges, corners, edgeMatrices: edges.instanceMatrix.array.slice(), cornerMatrices: corners.instanceMatrix.array.slice() };
+    edges.userData.noChunk = true; // updated when land owners change
+    corners.userData.noChunk = true;
     updateEstateEdging();    buildSeas();
   }
 

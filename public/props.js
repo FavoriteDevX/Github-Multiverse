@@ -1829,6 +1829,7 @@ vec3 grainPerturb( vec3 surfPos, vec3 surfNorm, vec2 dHdxy, float faceDir ) {
   const treeMaterials = new Map();
   function treeMaterial(variant = 'green') {
     if (!treeMaterials.has(variant)) treeMaterials.set(variant, new THREE.MeshStandardMaterial({ map: treeAtlas(variant), vertexColors: true, alphaTest: 0.45, side: THREE.DoubleSide, roughness: 0.85 }));
+    treeMaterials.get(variant).userData.variant = variant;
     return treeMaterials.get(variant);
   }
 
@@ -1914,6 +1915,7 @@ vec3 grainPerturb( vec3 surfPos, vec3 surfNorm, vec2 dHdxy, float faceDir ) {
       }
     }
     const geometry = mergeTreeParts(parts);
+    geometry.userData.treeKind = kind;
     treeGeometryCache.set(kind, geometry);
     return geometry;
   }

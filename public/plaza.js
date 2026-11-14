@@ -2786,7 +2786,273 @@
     [/plaza_tower/, 'plazaTower'], [/hot_air_balloon/, 'hotAirBalloon'], [/hydrant/, 'hydrant'], [/info_kiosk/, 'infoKiosk'],
     [/welcome_hall/, 'welcomeHall'], [/events_wall/, 'eventsWall'], [/glow_ring/, 'glowRing'], [/announcement_kiosk/, 'announcementKiosk'],
     [/^pond/, 'pond'], [/poster_wall/, 'posterWall'], [/square_pool/, 'squarePool'], [/underground_hall/, 'undergroundHall'],
-    [/^firepit/, 'firepit'], [/mini_game_arena/, 'miniGameArena'], [/teleport_portal/, 'teleportPortal'], [/sky_platform/, 'skyPlatform'], [/metro_station/, 'metroStation']
+    [/^firepit/, 'firepit'], [/mini_game_arena/, 'miniGameArena'], [/teleport_portal/, 'teleportPortal'], [/sky_platform/, 'skyPlatform'], [/metro_station/, 'metroStation'],
+    [/community_portals/, 'communityPortals']
   ];
+  // Community Portals: six discreet totems in an arc behind the spawn, each a
+  // short curved wall with two simple lamps, a minimalist totem with a sign
+  // (project title, author, URL) and a glowing portal ring. E on a free slot
+  // rents it (100 MVC, 24 h); walking into a rented portal opens its card.
+  builders.communityPortals = function communityPortals(group, { w }) {
+    const radius = (w || 40) * 0.42;
+    const stone = material('#e4e7ec', { roughness: 0.75 });
+    const metal = material('#3b4250', { metalness: 0.6, roughness: 0.4 });
+    for (let i = 0; i < 6; i++) {
+      const angle = THREE.MathUtils.degToRad(28 + i * 24.8);
+      const slot = new THREE.Group();
+      slot.position.set(Math.cos(angle) * radius, 0, Math.sin(angle) * radius);
+      slot.rotation.y = Math.atan2(-slot.position.x, -slot.position.z); // facing the spawn
+      // Short curved wall behind the portal
+      const wall = mesh(new THREE.CylinderGeometry(2.7, 2.7, 1.5, 24, 1, true, Math.PI - 0.85, 1.7), stone, 0, 0.75, 1.2);
+      wall.material = stone.clone();
+      wall.material.side = THREE.DoubleSide;
+      slot.add(wall);
+      slot.add(mesh(new THREE.CylinderGeometry(2.72, 2.72, 0.12, 24, 1, true, Math.PI - 0.85, 1.7), material('#c9ced6'), 0, 1.52, 1.2));
+      // Two simple lamps at the wall ends
+      [-1, 1].forEach((side) => {
+        const x = Math.sin(0.85) * 2.7 * side;
+        const z = 1.2 - Math.cos(0.85) * 2.7;
+        slot.add(cylinder(0.05, 0.06, 2.1, metal, x, 1.05, z, 6));
+        slot.add(sphere(0.16, glow('#ffe8b0', 1.2), x, 2.18, z, 10));
+      });
+      // Portal ring and its shimmering surface
+      const ring = mesh(new THREE.TorusGeometry(0.95, 0.07, 8, 40), glow('#4dabf7', 1.3), 0, 1.25, 0.15);
+      slot.add(ring);
+      const surface = mesh(new THREE.CircleGeometry(0.9, 36), new THREE.MeshBasicMaterial({ color: '#4dabf7', transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false }), 0, 1.25, 0.15);
+      slot.add(surface);
+      // Minimalist totem with the sign
+      const canvas = document.createElement('canvas');
+      canvas.width = 384;
+      canvas.height = 640;
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.encoding = THREE.sRGBEncoding;
+      const totem = facedBox(0.9, 1.9, 0.18, metal, new THREE.MeshBasicMaterial({ map: texture }), 1.55, 0.95 + 0.15, 0.2);
+      slot.add(totem);
+      slot.add(box(1.05, 0.15, 0.4, metal, 1.55, 0.07, 0.2));
+      [totem, ring, surface].forEach((target) => {
+        PropKit.kit.interactive(target, 'action', `Community Portal ${i + 1}`);
+        target.userData.onInteract = () => { CommunityPortals.interact(i); return null; };
+      });
+      animate(surface, (time) => { surface.material.opacity = 0.16 + Math.sin(time * 2.4 + i) * 0.07; ring.rotation.z = time * 0.3; });
+      group.add(slot);
+      CommunityPortals.registerSlot(i, { slot, portal: surface, canvas, texture });
+    }
+    const caption = textSprite('Community Portals · rent one for 24 h', { width: 9 });
+    caption.position.set(0, 3.2, radius * 0.95);
+    group.add(caption);
+    group.userData.label = 'Community Portals';
+  };
+
   rules.slice().reverse().forEach(([pattern, name]) => PropKit.registerBuilder(pattern, name, builders[name]));
+})();
+
+// ============================================================================
+// COMMUNITY PORTALS: STATE, SIGNS, RENT MODAL AND PROJECT CARD
+// ============================================================================
+// The server keeps the six slots (24 h each, 100 MVC) and broadcasts every
+// change ("portals_state"); this module draws the signs, opens the rent form
+// on a free slot and the project card (with an external link warning) on a
+// rented one, also when the player walks into its portal.
+const CommunityPortals = (() => {
+  const slots = [];
+  let state = Array.from({ length: 6 }, () => null);
+  let socket = null;
+  let hooks = { system: () => {} };
+  let overlay = null;
+  let insidePortal = -1;
+  const probe = new THREE.Vector3();
+  const esc = (text) => String(text == null ? '' : text).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  function wrap(ctx, text, x, y, maxWidth, lineHeight, maxLines) {
+    const words = String(text).split(/\s+/);
+    let line = '';
+    let lines = 0;
+    for (const word of words) {
+      const test = line ? `${line} ${word}` : word;
+      if (ctx.measureText(test).width > maxWidth && line) {
+        ctx.fillText(line, x, y + lines * lineHeight);
+        lines += 1;
+        line = word;
+        if (lines >= maxLines) return;
+      } else line = test;
+    }
+    if (line && lines < maxLines) ctx.fillText(line, x, y + lines * lineHeight);
+  }
+
+  function drawSign(index) {
+    const entry = slots[index];
+    if (!entry) return;
+    const { canvas, texture } = entry;
+    const ctx = canvas.getContext('2d');
+    const data = state[index];
+    ctx.fillStyle = '#f7f8fa';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = data ? '#1877f2' : '#adb5bd';
+    ctx.fillRect(0, 0, canvas.width, 10);
+    ctx.fillStyle = '#868e96';
+    ctx.font = '600 22px Segoe UI, Arial, sans-serif';
+    ctx.fillText(`COMMUNITY PORTAL ${index + 1}`, 28, 58);
+    if (data) {
+      ctx.fillStyle = '#0d1b3e';
+      ctx.font = 'bold 40px Segoe UI, Arial, sans-serif';
+      wrap(ctx, data.title, 28, 130, canvas.width - 56, 46, 3);
+      ctx.fillStyle = '#495057';
+      ctx.font = '24px Segoe UI, Arial, sans-serif';
+      wrap(ctx, data.description, 28, 300, canvas.width - 56, 32, 3);
+      ctx.fillStyle = '#1877f2';
+      ctx.font = '600 22px Segoe UI, Arial, sans-serif';
+      wrap(ctx, data.host || '', 28, 450, canvas.width - 56, 28, 2);
+      ctx.fillStyle = '#868e96';
+      ctx.font = '20px Segoe UI, Arial, sans-serif';
+      ctx.fillText(`by ${data.author}`, 28, 540);
+      ctx.fillText(`${Math.max(1, Math.ceil((data.expiresAt - Date.now()) / 3600000))} h left · E for details`, 28, 580);
+    } else {
+      ctx.fillStyle = '#0d1b3e';
+      ctx.font = 'bold 44px Segoe UI, Arial, sans-serif';
+      ctx.fillText('Available', 28, 150);
+      ctx.fillStyle = '#495057';
+      ctx.font = '24px Segoe UI, Arial, sans-serif';
+      wrap(ctx, 'Show your site or dev project here for 24 hours.', 28, 220, canvas.width - 56, 32, 4);
+      ctx.fillStyle = '#2f9e44';
+      ctx.font = 'bold 30px Segoe UI, Arial, sans-serif';
+      ctx.fillText('100 MVC', 28, 420);
+      ctx.fillStyle = '#868e96';
+      ctx.font = '20px Segoe UI, Arial, sans-serif';
+      ctx.fillText('Press E to rent', 28, 580);
+    }
+    texture.needsUpdate = true;
+  }
+
+  function registerSlot(index, entry) {
+    slots[index] = entry;
+    drawSign(index);
+  }
+
+  function setState(list) {
+    if (!Array.isArray(list)) return;
+    state = Array.from({ length: 6 }, (unused, i) => list[i] || null);
+    state.forEach((unused, i) => drawSign(i));
+  }
+
+  function css() {
+    if (document.getElementById('portal-style')) return;
+    const style = document.createElement('style');
+    style.id = 'portal-style';
+    style.textContent = `
+      #portal-overlay { position: fixed; inset: 0; z-index: 95; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(8, 12, 20, 0.55); font-family: var(--font, "Segoe UI", Arial, sans-serif); }
+      #portal-overlay .pt-card { width: min(420px, 100%); box-sizing: border-box; padding: 22px; border-radius: 16px; background: var(--panel-bg, rgba(14, 25, 52, 0.95)); border: 1px solid var(--panel-border, rgba(255,255,255,0.12)); color: #f0f0f5; box-shadow: 0 20px 50px rgba(0,0,0,0.45); }
+      #portal-overlay h3 { margin: 0 0 4px; font-size: 18px; }
+      #portal-overlay .pt-sub { margin: 0 0 14px; color: #a9b4c8; font-size: 13px; }
+      #portal-overlay label { display: block; margin: 10px 0 4px; font-size: 12px; color: #c9d1e0; }
+      #portal-overlay input, #portal-overlay textarea { width: 100%; box-sizing: border-box; padding: 9px 11px; border-radius: 9px; border: 1px solid rgba(255,255,255,0.16); background: rgba(255,255,255,0.06); color: #fff; font: 14px inherit; resize: none; }
+      #portal-overlay .pt-count { float: right; color: #7d8aa3; }
+      #portal-overlay .pt-error { min-height: 18px; margin: 10px 0 0; color: #ff8fa3; font-size: 13px; }
+      #portal-overlay .pt-warn { margin: 12px 0; padding: 10px 12px; border-radius: 10px; background: rgba(250, 176, 5, 0.12); border: 1px solid rgba(250, 176, 5, 0.35); color: #ffe08a; font-size: 12.5px; line-height: 1.45; }
+      #portal-overlay .pt-url { word-break: break-all; color: #74c0fc; font-size: 13px; }
+      #portal-overlay .pt-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
+      #portal-overlay button, #portal-overlay a.pt-open { padding: 9px 16px; border-radius: 10px; border: 0; cursor: pointer; font: 600 14px inherit; text-decoration: none; }
+      #portal-overlay .pt-cancel { background: rgba(255,255,255,0.1); color: #fff; }
+      #portal-overlay .pt-go, #portal-overlay a.pt-open { background: #1877f2; color: #fff; }
+      #portal-overlay .pt-go[disabled] { opacity: 0.6; cursor: wait; }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function close() {
+    if (overlay) { overlay.remove(); overlay = null; }
+  }
+  function isOpen() { return Boolean(overlay); }
+
+  function open(html) {
+    css();
+    close();
+    overlay = document.createElement('div');
+    overlay.id = 'portal-overlay';
+    overlay.innerHTML = `<div class="pt-card">${html}</div>`;
+    overlay.addEventListener('click', (event) => { if (event.target === overlay) close(); });
+    overlay.addEventListener('keydown', (event) => { if (event.key === 'Escape') { event.stopPropagation(); close(); } });
+    document.body.appendChild(overlay);
+    return overlay;
+  }
+
+  // A rented portal: description, an external link warning and a button that
+  // opens the site in a new tab
+  function showProject(index) {
+    const data = state[index];
+    if (!data) return;
+    const view = open(`<h3>${esc(data.title)}</h3><p class="pt-sub">by ${esc(data.author)} · Community Portal ${index + 1}</p>
+      <p style="margin:0 0 6px;line-height:1.5">${esc(data.description)}</p><div class="pt-url">${esc(data.url)}</div>
+      <div class="pt-warn">This link leaves GitHub Multiverse and opens an external site chosen by another player. Check the address before entering any data there.</div>
+      <div class="pt-actions"><button class="pt-cancel" type="button">Stay here</button><a class="pt-open" href="${esc(data.url)}" target="_blank" rel="noopener noreferrer nofollow">Open in a new tab</a></div>`);
+    view.querySelector('.pt-cancel').addEventListener('click', close);
+    view.querySelector('.pt-open').addEventListener('click', () => setTimeout(close, 100));
+    view.querySelector('.pt-open').focus();
+  }
+
+  // A free portal: title (30), short description (80) and an https:// URL for 100 MVC
+  function showRent(index) {
+    if (!socket) { hooks.system('Renting a Community Portal needs the multiplayer server.'); return; }
+    const view = open(`<h3>Rent Community Portal ${index + 1}</h3><p class="pt-sub">24 hours for 100 MVC · everyone in Genesis Plaza sees it</p>
+      <form><label>Title <span class="pt-count" data-for="title">0/30</span></label><input name="title" maxlength="30" required autocomplete="off">
+      <label>Short description <span class="pt-count" data-for="description">0/80</span></label><textarea name="description" maxlength="80" rows="2" required></textarea>
+      <label>URL (https:// only)</label><input name="url" type="url" maxlength="200" placeholder="https://your-project.dev" pattern="https://.+" required autocomplete="off">
+      <p class="pt-error"></p><div class="pt-actions"><button class="pt-cancel" type="button">Cancel</button><button class="pt-go" type="submit">Rent for 100 MVC</button></div></form>`);
+    const form = view.querySelector('form');
+    const error = view.querySelector('.pt-error');
+    form.querySelectorAll('input, textarea').forEach((field) => field.addEventListener('input', () => {
+      const counter = view.querySelector(`.pt-count[data-for="${field.name}"]`);
+      if (counter) counter.textContent = `${field.value.length}/${field.maxLength}`;
+    }));
+    view.querySelector('.pt-cancel').addEventListener('click', close);
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const title = form.title.value.trim();
+      const description = form.description.value.trim();
+      const url = form.url.value.trim();
+      if (!title || !description) { error.textContent = 'Fill in the title and the description.'; return; }
+      if (!/^https:\/\/[^\s]+\.[^\s]+$/i.test(url)) { error.textContent = 'The URL must start with https://'; return; }
+      const button = form.querySelector('.pt-go');
+      button.disabled = true;
+      button.textContent = 'Renting...';
+      socket.emit('portal_rent', { slot: index, title, description, url }, (reply = {}) => {
+        button.disabled = false;
+        button.textContent = 'Rent for 100 MVC';
+        if (reply.error) { error.textContent = reply.error; return; }
+        close();
+        hooks.system(`Community Portal ${index + 1} is yours for 24 hours: "${title}".`);
+      });
+    });
+    form.title.focus();
+  }
+
+  function interact(index) {
+    if (state[index]) showProject(index);
+    else showRent(index);
+  }
+
+  // Walking into a rented portal opens its card once (again after stepping away)
+  function update(position) {
+    if (!position || overlay) return;
+    let inside = -1;
+    slots.forEach((entry, index) => {
+      if (!entry || !state[index]) return;
+      entry.portal.getWorldPosition(probe);
+      if (Math.hypot(probe.x - position.x, probe.z - position.z) < 1.1 && Math.abs(probe.y - 1.25 - position.y) < 2.5) inside = index;
+    });
+    if (inside >= 0 && inside !== insidePortal) showProject(inside);
+    insidePortal = inside;
+  }
+
+  function connect(networkSocket, options = {}) {
+    hooks = { ...hooks, ...options };
+    socket = networkSocket || null;
+    if (!socket) return;
+    socket.on('portals_state', setState);
+    socket.emit('portals_list', setState);
+  }
+
+  // Signs show the hours left: refresh them every few minutes
+  setInterval(() => state.forEach((data, i) => { if (data) drawSign(i); }), 5 * 60 * 1000);
+
+  return { registerSlot, interact, update, connect, close, isOpen };
 })();
