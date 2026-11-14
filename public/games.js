@@ -364,7 +364,7 @@ const GameSystems = (() => {
       const screenMesh = box(w, h, 0.05, new THREE.MeshBasicMaterial({ map: screen.texture }), 0, 0, d / 2 + 0.03);
       group.add(screenMesh);
       // The keynotes autoplay (muted) right on the big screen when you are close
-      keynoteVideo = VideoScreens.register(screenMesh, w, h, VideoScreens.youtubeEmbed(KEYNOTE_PLAYLIST.map((entry) => entry.videoId)), { distance: 160 });
+      keynoteVideo = VideoScreens.register(screenMesh, w, h, VideoScreens.youtubeEmbed(KEYNOTE_PLAYLIST.map((entry) => entry.videoId)), { distance: 230, spatial: { full: 85, fade: 220 } });
       [-1, 1].forEach((side) => group.add(box(1.2, h + 4, 1.2, material('#2b2d42'), side * (w / 2 + 1), -2, 0)));
       keynoteScreen = { screen, group };
       group.userData.isKeynoteScreen = true;

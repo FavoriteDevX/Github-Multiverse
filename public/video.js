@@ -31,8 +31,10 @@ const VideoScreens = (() => {
     return `https://www.youtube.com/embed/videoseries?list=UU${channelId.slice(2)}&autoplay=1&mute=1&loop=1&playsinline=1&rel=0`;
   }
 
-  function register(anchor, width, height, source, { distance = ACTIVATE_DISTANCE } = {}) {
-    const screen = { anchor, width, height, source, distance, object: null, visible: true };
+  // `spatial` screens play with sound on their own, louder as you get closer:
+  // full volume within `full` meters (inside the venue), silent at `fade`
+  function register(anchor, width, height, source, { distance = ACTIVATE_DISTANCE, spatial = null } = {}) {
+    const screen = { anchor, width, height, source, distance, spatial, volume: -1, object: null, visible: true };
     screens.push(screen);
     return {
       setSource(next) {
@@ -50,8 +52,14 @@ const VideoScreens = (() => {
     element.style.pointerEvents = 'auto';
     element.style.background = '#000';
     const iframe = document.createElement('iframe');
-    // Only the nearest screen plays sound, so streams never overlap
-    iframe.src = soundOn && screen === audible ? screen.source.replace('mute=1', 'mute=0').replace('muted=true', 'muted=false') : screen.source;
+    // Only the nearest screen plays sound, so streams never overlap. Spatial
+    // screens start unmuted at volume 0 and are driven by distance (YouTube's
+    // player API through postMessage)
+    if (screen.spatial) {
+      iframe.src = `${screen.source.replace('mute=1', 'mute=0')}&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
+      screen.volume = -1;
+      iframe.addEventListener('load', () => { screen.volume = -1; command(screen, 'setVolume', [0]); });
+    } else iframe.src = soundOn && screen === audible ? screen.source.replace('mute=1', 'mute=0').replace('muted=true', 'muted=false') : screen.source;
     iframe.title = 'Video screen';
     iframe.allow = 'autoplay; encrypted-media; picture-in-picture';
     iframe.allowFullscreen = true;
@@ -59,6 +67,19 @@ const VideoScreens = (() => {
     element.appendChild(iframe);
     screen.object = new THREE.CSS3DObject(element);
     cssScene.add(screen.object);
+  }
+
+  function command(screen, func, args = []) {
+    const iframe = screen.object && screen.object.element.querySelector('iframe');
+    if (iframe && iframe.contentWindow) iframe.contentWindow.postMessage(JSON.stringify({ event: 'command', func, args, id: 1, channel: 'widget' }), '*');
+  }
+  // Volume from distance: 100 inside, a smooth fade to 0 at the edge
+  function spatialVolume(screen, distance) {
+    if (screen !== audible || (typeof Sound !== 'undefined' && !Sound.isEnabled())) return 0;
+    const { full, fade } = screen.spatial;
+    if (distance <= full) return 100;
+    const t = Math.min(1, (distance - full) / Math.max(1, fade - full));
+    return Math.round(100 * (1 - t) * (1 - t));
   }
 
   function removeIframe(screen) {
@@ -98,7 +119,7 @@ const VideoScreens = (() => {
       if (nearest !== audible) {
         const previous = audible;
         audible = nearest;
-        if (soundOn) [previous, nearest].forEach((screen) => { if (screen && screen.object) removeIframe(screen); });
+        if (soundOn) [previous, nearest].forEach((screen) => { if (screen && screen.object && !screen.spatial) removeIframe(screen); });
       }
     }
     screens.forEach((screen) => {
@@ -123,6 +144,14 @@ const VideoScreens = (() => {
         screen.visible = !blocked;
       }
       screen.object.element.style.visibility = screen.visible ? 'visible' : 'hidden';
+      if (screen.spatial) {
+        const target = spatialVolume(screen, worldPosition.distanceTo(avatarPosition));
+        if (Math.abs(target - screen.volume) >= 2 || (target === 0 && screen.volume !== 0) || (target === 100 && screen.volume !== 100)) {
+          screen.volume = target;
+          command(screen, target > 0 ? 'unMute' : 'mute');
+          command(screen, 'setVolume', [target]);
+        }
+      }
     });
     cssRenderer.render(cssScene, camera);
   }
@@ -131,7 +160,7 @@ const VideoScreens = (() => {
   // allow autoplay with sound). Returns the new state.
   function toggleSound() {
     soundOn = !soundOn;
-    screens.forEach((screen) => { if (screen.object) removeIframe(screen); });
+    screens.forEach((screen) => { if (screen.object && !screen.spatial) removeIframe(screen); });
     return soundOn;
   }
 
