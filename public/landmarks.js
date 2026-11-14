@@ -320,7 +320,7 @@
     // with the company logo, stairs to every floor and the rooftop, open-plan
     // offices with laptops (E to work), a glass meeting room and a coffee corner
     hqOffice(group, { w, h, d, color, label, type }) {
-      const name = (label || 'HQ').split(/ — | - /)[0];
+      const name = (label || 'HQ').split(/ — | - /)[0].replace(/\s+HQ$/i, '');
       const isWarm = /anthropic/.test(type);
       const wallColor = isWarm ? '#e8dccb' : /github/.test(type) ? '#2f363d' : /netflix/.test(type) ? '#1a1a1a' : '#dfe4ea';
       const brandColor = color;
@@ -419,7 +419,8 @@
       group.add(box(bw, 1.1, 0.08, glassRail, 0, roofY + 0.7, bz - bd / 2));
       const signWidth = Math.min(bw * 0.8, 22);
       const brandSign = BrandLogos.billboardTexture(name, { background: wallColor, foreground: brandColor, width: 1024, height: 256, layout: 'sign' });
-      group.add(box(signWidth, signWidth / 4, 0.3, new THREE.MeshBasicMaterial({ map: brandSign }), 0, roofY + signWidth / 8 + 1.4, bz - bd / 2 + 0.5));
+      // Rooftop sign facing the avenue: the company's real logo and name, whole
+      group.add(facedBox(signWidth, signWidth / 4, 0.3, material(shade(wallColor, -0.15)), new THREE.MeshBasicMaterial({ map: brandSign }), 0, roofY + signWidth / 8 + 1.4, bz + bd / 2 - 0.6));
 
       // ---- Interior furniture (merged per material to keep it light) ----
       const furniture = new THREE.Group();
@@ -464,7 +465,7 @@
       }
       group.add(PropKit.kit.mergeByMaterial(furniture));
       // Logo wall in the lobby, facing the entrance
-      const logoWall = box(Math.min(bw * 0.5, 8), 2.2, 0.15, new THREE.MeshBasicMaterial({ map: BrandLogos.billboardTexture(name, { background: '#ffffff', foreground: brandColor, width: 1024, height: 256, layout: 'sign' }) }), 0, base + 2.6, bz - bd / 2 + wallThickness + 0.1);
+      const logoWall = facedBox(Math.min(bw * 0.5, 8), 2.2, 0.15, material('#ffffff'), new THREE.MeshBasicMaterial({ map: BrandLogos.billboardTexture(name, { background: '#ffffff', foreground: brandColor, width: 1024, height: 256, layout: 'sign' }) }), 0, base + 2.6, bz - bd / 2 + wallThickness + 0.1);
       group.add(logoWall);
       group.add(PropKit.kit.laptop(1.2, base + 1.38, bz + bd * 0.1, Math.PI));
 

@@ -200,8 +200,15 @@ vec3 grainPerturb( vec3 surfPos, vec3 surfNorm, vec2 dHdxy, float faceDir ) {
     const detail = surfaceDetails.get(target.map.image);
     if (!detail) return false;
     if (!target.bumpMap && !target.normalMap) {
-      target.bumpMap = detail.detail;
-      target.bumpScale = detail.bumpScale;
+      const normal = normalTexture(detail.detail);
+      if (normal) {
+        target.normalMap = normal;
+        const depth = Math.max(0.7, Math.min(2.2, (detail.bumpScale || 0.015) / 0.012));
+        target.normalScale = new THREE.Vector2(depth, depth);
+      } else {
+        target.bumpMap = detail.detail;
+        target.bumpScale = detail.bumpScale;
+      }
     }
     if (!target.roughnessMap) target.roughnessMap = detail.detail;
     // Curtain walls: only the lit offices glow at night (not the whole facade)
@@ -318,7 +325,16 @@ vec3 grainPerturb( vec3 surfPos, vec3 surfNorm, vec2 dHdxy, float faceDir ) {
     return geometry;
   }
 
-  const box = (w, h, d, boxMaterial, x, y, z) => mesh(roundedBoxGeometry(w, h, d), boxMaterial, x, y, z);
+  // A picture that is not a tiling surface (signs, logos, posters, screens)
+  // goes on a plain box so the whole image shows (see facedBox)
+  const isPicture = (boxMaterial) => Boolean(boxMaterial && !Array.isArray(boxMaterial) && boxMaterial.map && boxMaterial.map.wrapS === THREE.ClampToEdgeWrapping && boxMaterial.map.repeat.x === 1 && boxMaterial.map.repeat.y === 1);
+  const plainBoxCache = new Map();
+  const plainBox = (w, h, d) => {
+    const key = `${w.toFixed(3)}|${h.toFixed(3)}|${d.toFixed(3)}`;
+    if (!plainBoxCache.has(key)) plainBoxCache.set(key, new THREE.BoxGeometry(w, h, d));
+    return plainBoxCache.get(key);
+  };
+  const box = (w, h, d, boxMaterial, x, y, z) => mesh(isPicture(boxMaterial) ? plainBox(w, h, d) : roundedBoxGeometry(w, h, d), boxMaterial, x, y, z);
   const cylinder = (radiusTop, radiusBottom, h, cylinderMaterial, x, y, z, segments = 16) =>
     mesh(new THREE.CylinderGeometry(radiusTop, radiusBottom, h, segments), cylinderMaterial, x, y, z);
   const sphere = (radius, sphereMaterial, x, y, z, segments = 12) =>
@@ -924,7 +940,50 @@ vec3 grainPerturb( vec3 surfPos, vec3 surfNorm, vec2 dHdxy, float faceDir ) {
         bytes[dst + 3] = 255;
       }
     }
-    return dataTexture(bytes, w, h);
+    const texture = dataTexture(bytes, w, h);
+    texture.userData.height = { height, w, h };
+    return texture;
+  }
+
+  // Real relief instead of a flat picture: a tangent-space normal map computed
+  // from the height map (Sobel, wrapping at the edges), so every joint, chip,
+  // plank seam and brick edge catches the sun and casts its own shading as the
+  // light moves. Big maps are computed at half size (sharp enough, 4x lighter).
+  function normalTexture(detail) {
+    if (detail.userData.normal) return detail.userData.normal;
+    const source = detail.userData.height;
+    if (!source) return null;
+    const step = source.w >= 1024 ? 2 : 1;
+    const w = Math.floor(source.w / step);
+    const h = Math.floor(source.h / step);
+    const sample = (x, y) => {
+      const sx = ((x % w) + w) % w;
+      const sy = ((y % h) + h) % h;
+      return source.height[sy * step * source.w + sx * step];
+    };
+    const strength = 5.5 * (w / 512);
+    const bytes = new Uint8Array(w * h * 4);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const gx = (sample(x + 1, y - 1) + 2 * sample(x + 1, y) + sample(x + 1, y + 1)) - (sample(x - 1, y - 1) + 2 * sample(x - 1, y) + sample(x - 1, y + 1));
+        const gy = (sample(x - 1, y + 1) + 2 * sample(x, y + 1) + sample(x + 1, y + 1)) - (sample(x - 1, y - 1) + 2 * sample(x, y - 1) + sample(x + 1, y - 1));
+        // Texture rows are stored bottom-up (v grows upwards), source rows top-down
+        let nx = -gx * strength / 4;
+        let ny = gy * strength / 4;
+        const length = Math.hypot(nx, ny, 1);
+        nx /= length;
+        ny /= length;
+        const nz = 1 / length;
+        const dst = ((h - 1 - y) * w + x) * 4;
+        bytes[dst] = (nx * 0.5 + 0.5) * 255;
+        bytes[dst + 1] = (ny * 0.5 + 0.5) * 255;
+        bytes[dst + 2] = (nz * 0.5 + 0.5) * 255;
+        bytes[dst + 3] = 255;
+      }
+    }
+    const normal = dataTexture(bytes, w, h);
+    detail.userData.normal = normal;
+    return normal;
   }
 
   // Draws fn(dx, dy) at every wrapped copy needed for a shape near the edges
@@ -2025,9 +2084,15 @@ vec3 grainPerturb( vec3 surfPos, vec3 surfNorm, vec2 dHdxy, float faceDir ) {
   }
 
   // A box whose front face (+z) shows a texture
+  // Box with a picture on its front face. A plain box (not the rounded one):
+  // the rounded box keeps its UVs in thirds, so a sign on it only showed the
+  // middle third of the picture (cut-off logos and names)
+  const facedGeometryCache = new Map();
   function facedBox(w, h, d, bodyMaterial, frontMaterial, x, y, z) {
+    const key = `${w.toFixed(3)}|${h.toFixed(3)}|${d.toFixed(3)}`;
+    if (!facedGeometryCache.has(key)) facedGeometryCache.set(key, new THREE.BoxGeometry(w, h, d));
     const materials = [bodyMaterial, bodyMaterial, bodyMaterial, bodyMaterial, frontMaterial, bodyMaterial];
-    return mesh(roundedBoxGeometry(w, h, d), materials, x, y, z);
+    return mesh(facedGeometryCache.get(key), materials, x, y, z);
   }
 
   // Invisible spot you can sit on (E) for seats drawn as merged or instanced meshes
