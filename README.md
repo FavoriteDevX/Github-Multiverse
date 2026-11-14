@@ -18,18 +18,20 @@ So, imagine to have a fun, useful and 3D virtual dimension world, just for devs 
 
 <img width="800" height="500" alt="image-1792525351352" src="https://github.com/user-attachments/assets/e51c9163-3151-4232-91f6-772264bf64fc" />
 <img width="1088" height="612" alt="36-Developers_Daily_Life" src="https://github.com/user-attachments/assets/8c64522a-3722-4fd8-98e5-f159a74165a6" />
-<img width="595" height="260" alt="image3" src="https://github.com/user-attachments/assets/cebfb9e4-b438-4a1f-8690-5bf746b8613e" />
+
+*falling down to the undergroud pov*
+<img width="1365" height="633" alt="image" src="https://github.com/user-attachments/assets/5f968dcc-15f4-4c56-9333-df231d41f517" />
+
 <img width="1000" height="563" alt="image4" src="https://github.com/user-attachments/assets/ded4936b-fe30-466b-b58d-c35c21ca26df" />
 <img width="1088" height="612" alt="46-Multiverse_Forest" src="https://github.com/user-attachments/assets/3f3bb7e5-4e3c-4b8e-a596-f2b474e50b97" />
 <img width="1000" height="319" alt="image5" src="https://github.com/user-attachments/assets/746b9980-eac2-4dd5-bf1b-485adae692dd" />
-<img width="1088" height="612" alt="12-House_of_MAC" src="https://github.com/user-attachments/assets/63530818-6bbf-45fd-9d3d-0b004925129a" />
+<img width="1299" height="617" alt="image" src="https://github.com/user-attachments/assets/5f108cd3-4adf-4d7d-97e4-f44e2b3d8e14" />
 <img width="1280" height="720" alt="builder-mode" src="https://github.com/user-attachments/assets/4c902027-da09-432b-8937-63cd6ec93900" />
-<img width="1088" height="612" alt="51-Retro_Arcade" src="https://github.com/user-attachments/assets/046310d2-a133-44b7-8651-c5ea7c7b05df" />
-<img width="1088" height="612" alt="36-Developers_Daily_Life(1)" src="https://github.com/user-attachments/assets/1ea428d0-3a03-4e8f-b3ed-047cbcfc773f" />
-<img width="800" height="500" alt="image-1792446237133" src="https://github.com/user-attachments/assets/4c46953c-ad7c-423f-a3eb-af59da0f9f9d" />
-<img width="1000" height="583" alt="image1" src="https://github.com/user-attachments/assets/f3094d70-9e9f-4014-a209-5f9d65e75d96" />
-<img width="1000" height="563" alt="image2" src="https://github.com/user-attachments/assets/eadcbb9c-87d5-4a44-882a-54e62bf1f917" />
-<img width="800" height="500" alt="image-1792445068872" src="https://github.com/user-attachments/assets/4bddc482-7df5-4834-b512-a4debfb14c44" />
+<img width="1365" height="627" alt="image" src="https://github.com/user-attachments/assets/28ef8b9f-d128-4a98-bf99-d8bf4be4d270" />
+<img width="1365" height="601" alt="image" src="https://github.com/user-attachments/assets/d817eda5-959f-41a0-adbd-646f44080111" />
+<img width="1088" height="612" alt="image" src="https://github.com/user-attachments/assets/8e70bcfb-8add-4660-beb1-1d6e6f51291e" />
+<img width="1088" height="612" alt="image" src="https://github.com/user-attachments/assets/ffeaf0b0-7f9a-4d5f-bad2-896828bf7ebd" />
+
 
 <details>
   <summary>🎮 Controls</summary>
