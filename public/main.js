@@ -1081,7 +1081,7 @@ function bindInputEvents() {
     if (window.SceneBuilder && SceneBuilder.handleKey(event)) return;
     // Shift+U: hide every overlay and keep only the scenery (screenshot mode)
     if (event.key === 'U') { document.body.classList.toggle('hide-ui'); return; }
-    if (event.key === 'Escape') { CommunityPortals.close(); closeInfoCard(); closeStream(); Cafe.close(); document.getElementById('mvc-store').style.display = 'none'; }
+    if (event.key === 'Escape') { CommunityPortals.close(); Coworking.close(); closeInfoCard(); closeStream(); Cafe.close(); document.getElementById('mvc-store').style.display = 'none'; }
     // M: the Genesis City map (top view of every parcel); from the 3D overhead view, M walks again
     if (event.key.toLowerCase() === 'm') { if (viewMode === 'map') setViewMode('explore'); else CityMap.toggle(); return; }
     if (event.key.toLowerCase() === 'v') { appendSystemMessage(VideoScreens.toggleSound() ? 'Video screens: sound ON (press V to mute).' : 'Video screens muted (press V for sound).'); return; }
@@ -1445,6 +1445,18 @@ function interpretChatCommand(inputBuffer) {
   const context = { cursorPosition: localCursor.target.clone(), greenTechContains: (position) => { const district = City.districtAt(position.x, position.z); return district && district.world.key === 'greentech'; } };
 
   switch (command) {
+    case 'github': {
+      // Links your GitHub account: your parcels show a showcase with your public stats
+      if (!socket) { appendSystemMessage('Linking GitHub needs the multiplayer server.'); return; }
+      socket.emit('set_github', args[0] || '', (reply = {}) => appendSystemMessage(reply.error || (reply.github ? `GitHub linked: @${reply.github}. Your parcels now show your GitHub showcase.` : 'GitHub unlinked.')));
+      return;
+    }
+    case 'status': {
+      const value = { available: 'available', focus: 'focus', afk: 'afk', away: 'afk', busy: 'focus' }[(args[0] || '').toLowerCase()];
+      if (!value) { appendSystemMessage('Use /status available, /status focus or /status afk.'); return; }
+      document.querySelector(`#status-picker [data-status="${value}"]`)?.click();
+      return;
+    }
     case 'help':
     case '?': {
       const page = parseInt(args[0], 10);
@@ -1701,10 +1713,10 @@ function displayChatMessage(message) {
   const item = document.createElement('li');
   const district = City.districtAt(...(message.id === (localDeveloperData && localDeveloperData.id) ? [localCursor.target.x, localCursor.target.z] : remoteMeshPointers[message.id] ? [remoteMeshPointers[message.id].target.x, remoteMeshPointers[message.id].target.z] : [0, 0]));
   const isAction = message.text.startsWith('/me ');
-  if (district && !message.private) {
+  if ((district || message.table) && !message.private) {
     const place = document.createElement('span');
     place.className = 'place-tag';
-    place.textContent = `[${district.world.name}] `;
+    place.textContent = message.table ? `[${Coworking.tableName(message.table)} · private] ` : `[${district.world.name}] `;
     item.appendChild(place);
   }
   const author = document.createElement('span');
@@ -1965,6 +1977,7 @@ function animate() {
   if (viewMode === 'explore') Prank.update(avatar.position);
   Interactions.update(avatar.position, !!avatar.moving);
   CommunityPortals.update(avatar.position);
+  Coworking.update(avatar.position);
   // District titles fade out when the camera gets close, so they never block the view
   City.districts.forEach((district) => {
     const titlePosition = district.title.getWorldPosition(new THREE.Vector3());
@@ -2236,6 +2249,7 @@ Promise.all([launched, universeReady]).then(([launch]) => {
   if (Auth.hasServer) socket = io({ auth: { token: session.token, lobby: lobbyId } });
   setupNetwork(session);
   CommunityPortals.connect(socket, { system: appendSystemMessage });
+  Coworking.connect(socket, { system: appendSystemMessage, localRecord: () => localCursor, peers: () => remoteMeshPointers });
   enterFromLauncher(launch.entry);
   // First time only: customize the cursor before entering (Decentraland-style).
   // A look saved in this browser or in the account (server) skips it.

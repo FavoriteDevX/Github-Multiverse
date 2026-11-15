@@ -381,6 +381,76 @@ const City = (() => {
     edging.corners.instanceMatrix.needsUpdate = true;
   }
 
+  // GitHub showcase totem for an owned parcel. Public profile data comes from
+  // api.github.com (no token; cached in this browser for 6 hours)
+  const githubProfiles = new Map();
+  function githubProfile(handle) {
+    const key = handle.toLowerCase();
+    if (githubProfiles.has(key)) return githubProfiles.get(key);
+    let cached = null;
+    try { cached = JSON.parse(localStorage.getItem(`github-profile:${key}`) || 'null'); } catch (error) { cached = null; }
+    const promise = cached && Date.now() - cached.at < 6 * 3600 * 1000
+      ? Promise.resolve(cached.data)
+      : fetch(`https://api.github.com/users/${encodeURIComponent(handle)}`, { headers: { Accept: 'application/vnd.github+json' } })
+        .then((response) => (response.ok ? response.json() : Promise.reject(new Error(String(response.status)))))
+        .then((data) => {
+          const profile = { login: data.login, name: data.name, repos: data.public_repos, followers: data.followers, following: data.following, since: data.created_at ? new Date(data.created_at).getFullYear() : null, bio: data.bio };
+          try { localStorage.setItem(`github-profile:${key}`, JSON.stringify({ at: Date.now(), data: profile })); } catch (error) { /* storage full */ }
+          return profile;
+        });
+    githubProfiles.set(key, promise);
+    return promise;
+  }
+  function githubTotem(handle) {
+    const { box, facedBox } = PropKit.kit;
+    const totem = new THREE.Group();
+    const canvas = document.createElement('canvas');
+    canvas.width = 320;
+    canvas.height = 560;
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.encoding = THREE.sRGBEncoding;
+    const draw = (profile, failed) => {
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#0d1117';
+      ctx.fillRect(0, 0, 320, 560);
+      ctx.fillStyle = '#2f81f7';
+      ctx.fillRect(0, 0, 320, 8);
+      ctx.fillStyle = '#8b949e';
+      ctx.font = '600 18px Segoe UI, Arial, sans-serif';
+      ctx.fillText('GITHUB SHOWCASE', 22, 48);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 30px Segoe UI, Arial, sans-serif';
+      ctx.fillText(`@${handle}`, 22, 100, 276);
+      if (profile && profile.name) { ctx.fillStyle = '#c9d1d9'; ctx.font = '20px Segoe UI, Arial, sans-serif'; ctx.fillText(profile.name, 22, 132, 276); }
+      const rows = profile ? [['Public repos', profile.repos], ['Followers', profile.followers], ['Following', profile.following], ['On GitHub since', profile.since || '-']] : [];
+      rows.forEach(([label, value], i) => {
+        const y = 190 + i * 78;
+        ctx.fillStyle = '#161b22';
+        ctx.fillRect(22, y - 40, 276, 62);
+        ctx.fillStyle = '#8b949e';
+        ctx.font = '16px Segoe UI, Arial, sans-serif';
+        ctx.fillText(label, 36, y - 14);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 24px Segoe UI, Arial, sans-serif';
+        ctx.fillText(String(value), 36, y + 14);
+      });
+      if (!profile) { ctx.fillStyle = '#8b949e'; ctx.font = '18px Segoe UI, Arial, sans-serif'; ctx.fillText(failed ? 'Profile unavailable now' : 'Loading profile...', 22, 200); }
+      ctx.fillStyle = '#58a6ff';
+      ctx.font = '16px Segoe UI, Arial, sans-serif';
+      ctx.fillText(`github.com/${handle}`, 22, 536, 276);
+      texture.needsUpdate = true;
+    };
+    draw(null);
+    githubProfile(handle).then((profile) => draw(profile)).catch(() => draw(null, true));
+    const dark = material('#1f2328', { metalness: 0.5, roughness: 0.4 });
+    totem.add(box(1.4, 0.25, 0.7, dark, 0, 0.125, 0));
+    const face = facedBox(1.2, 2.1, 0.22, dark, new THREE.MeshBasicMaterial({ map: texture }), 0, 1.35, 0);
+    face.userData.label = `GitHub showcase · @${handle}`;
+    totem.add(face);
+    totem.position.set(-5.5, 0, 5.5);
+    return totem;
+  }
+
   // Owned parcels: a fenced plot with the owner's sign (only these become 3D
   // objects); an estate gets one plot without posts between its parcels
   let ownedGroup = null;
@@ -417,6 +487,9 @@ const City = (() => {
         sign.position.y = 3;
         plot.add(sign);
       }
+      // GitHub showcase: the owner linked a GitHub account (/github <user>), so a
+      // totem shows the @username and the public profile stats from the GitHub API
+      if (land.github && !joined.w && !joined.s) plot.add(githubTotem(land.github));
       ownedGroup.add(plot);
     });
     scene.add(ownedGroup);

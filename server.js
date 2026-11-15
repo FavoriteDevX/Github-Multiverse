@@ -647,6 +647,53 @@ function validatePortalUrl(raw) {
 }
 setInterval(() => { if (expirePortals()) io.emit('portals_state', publicPortals()); }, 60 * 1000);
 
+// Lands for the clients, with the GitHub handle each owner linked (/github)
+function landsPayload() {
+  const out = {};
+  Object.entries(accounts.lands).forEach(([parcel, land]) => {
+    const owner = accounts.users[String(land.owner || '').toLowerCase()];
+    out[parcel] = owner && owner.github ? { ...land, github: owner.github } : land;
+  });
+  return out;
+}
+
+// ----------------------------------------------------------------------------
+// Coworking Hub: four private tables in Genesis Plaza. Players inside a table's
+// area share a private chat, a code board, a collective Pomodoro (25 min,
+// +15 MVC each) and can "commit code" from the table laptops (+3 MVC).
+// ----------------------------------------------------------------------------
+const COWORK_TABLES = 4;
+const COMMIT_REWARD = 3;
+const COMMIT_COOLDOWN_MS = 60 * 1000;
+const POMODORO_MS = 25 * 60 * 1000;
+const POMODORO_REWARD = 15;
+const coworkBoards = {};    // "room|table" -> { text, by, at }
+const coworkPomodoros = {}; // "room|table" -> { endsAt, startedBy, members: Set(userKey), timer }
+const tableRoom = (room, table) => `cowork:${room}:${table}`;
+function pomodoroPayload(key, table) {
+  const pomodoro = coworkPomodoros[key];
+  return { table, running: Boolean(pomodoro), endsAt: pomodoro ? pomodoro.endsAt : 0, startedBy: pomodoro ? pomodoro.startedBy : null };
+}
+
+// Collabs & jobs board: 20 MVC for a card looking for partners (14 days)
+const COLLAB_PRICE = 20;
+const COLLAB_DAYS = 14;
+const COLLABS_FILE = path.join(DATA_DIR, 'collabs.json');
+let collabCards = [];
+try { collabCards = JSON.parse(fs.readFileSync(COLLABS_FILE, 'utf8')) || []; } catch (error) { collabCards = []; }
+function publicCollabs() {
+  const now = Date.now();
+  const before = collabCards.length;
+  collabCards = collabCards.filter((card) => card.expiresAt > now).slice(0, 40);
+  if (collabCards.length !== before) saveCollabs();
+  return collabCards.map(({ id, title, roles, description, repo, author, createdAt, expiresAt }) => ({ id, title, roles, description, repo, author, createdAt, expiresAt }));
+}
+function saveCollabs() {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFile(COLLABS_FILE, JSON.stringify(collabCards), (error) => { if (error) console.error('[COLLABS] Could not save:', error.message); });
+}
+const STATUSES = ['available', 'focus', 'afk'];
+
 io.on('connection', (socket) => {
   const account = accounts.users[socket.data.userKey];
   const developerTag = account.username;
@@ -674,6 +721,118 @@ io.on('connection', (socket) => {
   socket.emit('loot_spawns', publicLoot());
   socket.emit('tech_feeds', TechFeeds.snapshot());
   socket.emit('portals_state', publicPortals());
+  socket.emit('collabs_state', publicCollabs());
+
+  // ---- Coworking tables ----
+  socket.on('cowork_zone', (rawTable, ack) => {
+    const reply = typeof ack === 'function' ? ack : () => {};
+    if (!developer()) return reply({ error: 'Not connected.' });
+    const table = Number.isInteger(rawTable) && rawTable >= 1 && rawTable <= COWORK_TABLES ? rawTable : null;
+    const previous = developer().table;
+    if (previous === table) return reply({ ok: true, table });
+    if (previous) socket.leave(tableRoom(room, previous));
+    developer().table = table;
+    if (!table) return reply({ ok: true, table: null });
+    socket.join(tableRoom(room, table));
+    const key = `${room}|${table}`;
+    reply({ ok: true, table, board: coworkBoards[key] || { text: '', by: null, at: 0 }, pomodoro: pomodoroPayload(key, table) });
+  });
+  socket.on('cowork_commit', (ack) => {
+    const reply = typeof ack === 'function' ? ack : () => {};
+    const me = accounts.users[socket.data.userKey];
+    if (!me || !developer() || !developer().table) return reply({ error: 'Sit at a coworking table to commit.' });
+    const wait = COMMIT_COOLDOWN_MS - (Date.now() - (me.lastCoworkCommit || 0));
+    if (wait > 0) return reply({ error: `Next commit in ${Math.ceil(wait / 1000)} s.` });
+    me.lastCoworkCommit = Date.now();
+    me.coins = walletOf(me) + COMMIT_REWARD;
+    saveAccounts();
+    socket.emit('wallet', { coins: me.coins, earned: COMMIT_REWARD, reason: 'commit at a coworking table' });
+    socket.to(tableRoom(room, developer().table)).emit('cowork_event', { table: developer().table, text: `${developer().devTag} committed code.` });
+    reply({ ok: true, coins: me.coins });
+  });
+  socket.on('cowork_board', ({ text } = {}) => {
+    if (!developer() || !developer().table || typeof text !== 'string') return;
+    const table = developer().table;
+    const board = { text: text.slice(0, 8000), by: developer().devTag, at: Date.now() };
+    coworkBoards[`${room}|${table}`] = board;
+    socket.to(tableRoom(room, table)).emit('cowork_board', { table, ...board });
+  });
+  socket.on('cowork_pomodoro_start', (ack) => {
+    const reply = typeof ack === 'function' ? ack : () => {};
+    if (!developer() || !developer().table) return reply({ error: 'Sit at a coworking table first.' });
+    const table = developer().table;
+    const key = `${room}|${table}`;
+    if (coworkPomodoros[key]) return reply({ error: 'A Pomodoro is already running at this table.' });
+    const members = new Set();
+    const sockets = io.sockets.adapter.rooms.get(tableRoom(room, table)) || new Set();
+    sockets.forEach((id) => { const peer = io.sockets.sockets.get(id); if (peer && peer.data.userKey) members.add(peer.data.userKey); });
+    const pomodoro = { endsAt: Date.now() + POMODORO_MS, startedBy: developer().devTag, members };
+    pomodoro.timer = setTimeout(() => {
+      delete coworkPomodoros[key];
+      // Everyone who started it and is still at the table earns the reward
+      const now = io.sockets.adapter.rooms.get(tableRoom(room, table)) || new Set();
+      const paid = new Set();
+      now.forEach((id) => {
+        const peer = io.sockets.sockets.get(id);
+        const user = peer && accounts.users[peer.data.userKey];
+        if (!user || !members.has(peer.data.userKey) || paid.has(peer.data.userKey)) return;
+        paid.add(peer.data.userKey);
+        user.coins = walletOf(user) + POMODORO_REWARD;
+        peer.emit('wallet', { coins: user.coins, earned: POMODORO_REWARD, reason: 'collective Pomodoro' });
+      });
+      saveAccounts();
+      io.to(tableRoom(room, table)).emit('cowork_pomodoro', { table, running: false, endsAt: 0, done: true, paid: paid.size });
+    }, POMODORO_MS);
+    coworkPomodoros[key] = pomodoro;
+    io.to(tableRoom(room, table)).emit('cowork_pomodoro', pomodoroPayload(key, table));
+    reply({ ok: true });
+  });
+
+  // ---- Status next to the name (available, focus, afk) ----
+  socket.on('set_status', (status) => {
+    if (!developer() || !STATUSES.includes(status)) return;
+    developer().status = status;
+    io.to(room).emit('peer_status', { id: socket.id, status });
+  });
+
+  // ---- Collabs & jobs board ----
+  socket.on('collabs_list', (ack) => { if (typeof ack === 'function') ack(publicCollabs()); });
+  socket.on('collab_post', (payload = {}, ack) => {
+    const reply = typeof ack === 'function' ? ack : () => {};
+    const me = accounts.users[socket.data.userKey];
+    if (!me) return reply({ error: 'Sign in again to post.' });
+    const title = cleanText(payload.title, 40);
+    const roles = cleanText(payload.roles, 60);
+    const description = cleanText(payload.description, 140);
+    if (!title || !description) return reply({ error: 'Add a title and a short description.' });
+    let repo = '';
+    if (payload.repo) {
+      const link = validatePortalUrl(payload.repo);
+      if (link.error) return reply({ error: link.error });
+      repo = link.url;
+    }
+    if (walletOf(me) < COLLAB_PRICE) return reply({ error: `You need ${COLLAB_PRICE} MVC (you have ${walletOf(me)}).` });
+    me.coins = walletOf(me) - COLLAB_PRICE;
+    saveAccounts();
+    collabCards.unshift({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), title, roles, description, repo, author: me.username, createdAt: Date.now(), expiresAt: Date.now() + COLLAB_DAYS * 86400000 });
+    saveCollabs();
+    socket.emit('wallet', { coins: me.coins, spent: COLLAB_PRICE, reason: 'Collabs board card' });
+    io.emit('collabs_state', publicCollabs());
+    reply({ ok: true });
+  });
+
+  // ---- GitHub handle shown on the owner's parcels (/github <handle>) ----
+  socket.on('set_github', (handle, ack) => {
+    const reply = typeof ack === 'function' ? ack : () => {};
+    const me = accounts.users[socket.data.userKey];
+    if (!me) return reply({ error: 'Sign in again.' });
+    const clean = String(handle || '').replace(/^@/, '').trim();
+    if (clean && !/^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i.test(clean)) return reply({ error: 'That is not a valid GitHub username.' });
+    me.github = clean || undefined;
+    saveAccounts();
+    io.emit('lands', landsPayload());
+    reply({ ok: true, github: me.github || null });
+  });
   socket.on('portals_list', (ack) => { if (typeof ack === 'function') ack(publicPortals()); });
   // Rent a free portal for 24 h: validated text and link, 100 MVC from the balance
   socket.on('portal_rent', (payload = {}, ack) => {
@@ -714,6 +873,9 @@ io.on('connection', (socket) => {
   socket.on('chat_message', (rawText) => {
     const text = cleanText(rawText, MAX_CHAT_LENGTH);
     if (!developer() || !text) return;
+    // At a coworking table the chat stays among the people at that table
+    const table = developer().table;
+    if (table) { io.to(tableRoom(room, table)).emit('chat_message', { id: socket.id, devTag: developer().devTag, color: developer().color, text, table, timestamp: Date.now() }); return; }
     io.to(room).emit('chat_message', { id: socket.id, devTag: developer().devTag, color: developer().color, text, timestamp: Date.now() });
   });
 
@@ -966,7 +1128,7 @@ io.on('connection', (socket) => {
 
   // Economy: wallet, land parcels and transfers between devs
   socket.emit('wallet', { coins: walletOf(account) });
-  socket.emit('lands', accounts.lands);
+  socket.emit('lands', landsPayload());
   // Why a parcel cannot be bought right now (null when it can)
   function landProblem(parcel) {
     if (typeof parcel !== 'string' || !/^-?\d{1,3},-?\d{1,3}$/.test(parcel)) return 'Invalid parcel.';
@@ -984,7 +1146,7 @@ io.on('connection', (socket) => {
   function grantParcel(parcel, how) {
     accounts.lands[parcel] = { owner: account.username, boughtAt: Date.now(), ...how };
     saveAccounts();
-    io.emit('lands', accounts.lands);
+    io.emit('lands', landsPayload());
     io.emit('system_message', `${developer().devTag} bought parcel ${parcel} in Genesis City!`);
   }
 

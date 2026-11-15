@@ -1421,6 +1421,35 @@
     44
    ],
    "label": "Community Portals"
+  },
+  {
+   "type": "coworking_hub",
+   "position": [
+    70,
+    0,
+    -78
+   ],
+   "scale": [
+    28,
+    4,
+    22
+   ],
+   "label": "Coworking Hub"
+  },
+  {
+   "type": "collab_board",
+   "position": [
+    -84,
+    0,
+    80
+   ],
+   "scale": [
+    6,
+    4,
+    0.3
+   ],
+   "rotationY": 2.36,
+   "label": "Collabs & Jobs board"
   }
  ]
 }
