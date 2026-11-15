@@ -132,47 +132,73 @@ const Sound = (() => {
     return fire;
   }
 
-  // Cursor glide: instead of footsteps, the soft hiss of a mouse sliding on a
-  // cloth mousepad (filtered white noise with a slow, uneven texture), plus a
-  // faint plastic tick now and then. It swells while you move and fades when
-  // you stop.
-  let glide = null;
-  let glideTickTimer = 0;
-  function glideLoop() {
+  // Sea: a bed of surf (brown noise that swells and falls back like waves on
+  // the shore, about every 6 s), louder the closer you are to the water
+  let waves = null;
+  function wavesLoop() {
     const ctx = ensure();
     if (!ctx) return null;
-    if (glide) return glide;
-    const seconds = 3;
-    const buffer = ctx.createBuffer(1, ctx.sampleRate * seconds, ctx.sampleRate);
-    const data = buffer.getChannelData(0);
-    let texture = 0;
-    for (let i = 0; i < data.length; i++) {
-      // The weave of the mousepad: the noise level wobbles a little
-      if (i % 600 === 0) texture = 0.55 + Math.random() * 0.45;
-      data[i] = (Math.random() * 2 - 1) * texture;
+    if (waves) return waves;
+    const seconds = 12;
+    const buffer = ctx.createBuffer(2, ctx.sampleRate * seconds, ctx.sampleRate);
+    for (let channel = 0; channel < 2; channel++) {
+      const data = buffer.getChannelData(channel);
+      let brown = 0;
+      for (let i = 0; i < data.length; i++) {
+        const t = i / ctx.sampleRate;
+        brown = (brown + (Math.random() * 2 - 1) * 0.03) / 1.03;
+        // Two waves per loop, each a quick rise and a long hiss back
+        const phase = (t / 6 + channel * 0.08) % 1;
+        const swell = phase < 0.25 ? phase / 0.25 : Math.pow(1 - (phase - 0.25) / 0.75, 1.6);
+        const hiss = (Math.random() * 2 - 1) * 0.12 * swell * swell;
+        data[i] = brown * (0.9 + swell * 2.6) + hiss;
+      }
     }
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.loop = true;
-    const band = ctx.createBiquadFilter();
-    band.type = 'bandpass';
-    band.frequency.value = 2400;
-    band.Q.value = 0.7;
-    const soft = ctx.createBiquadFilter();
-    soft.type = 'lowpass';
-    soft.frequency.value = 5200;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 1400;
     const gain = ctx.createGain();
     gain.gain.value = 0;
-    source.connect(band).connect(soft).connect(gain).connect(master);
+    source.connect(filter).connect(gain).connect(master);
     source.start();
-    glide = { gain, band };
-    return glide;
+    waves = { gain };
+    return waves;
+  }
+
+  // Keyboards at the coworking tables: bursts of key clicks (words), short
+  // pauses, a space bar now and then; louder near the tables
+  let typingTimer = 0;
+  let typingBurst = 0;
+  function keyClick(volume, space = false) {
+    noiseBurst({ duration: space ? 0.035 : 0.014 + Math.random() * 0.01, volume: volume * (0.6 + Math.random() * 0.5), filter: space ? 900 + Math.random() * 300 : 2600 + Math.random() * 2400, type: space ? 'bandpass' : 'highpass' });
   }
 
   let birdTimer = 3;
   // Called every frame with the avatar state
-  function update(deltaSeconds, { moving, grounded, running, surface, night, fireDistance = Infinity, day = false }) {
-    if (!enabled) { if (fire) fire.gain.gain.value = 0; if (glide) glide.gain.gain.value = 0; return; }
+  function update(deltaSeconds, { grounded, night, fireDistance = Infinity, day = false, seaDistance = Infinity, typingDistance = Infinity }) {
+    if (!enabled) { if (fire) fire.gain.gain.value = 0; if (waves) waves.gain.gain.value = 0; return; }
+    // Surf: full on the shore, silent beyond 80 m
+    const waveVolume = seaDistance < 80 ? Math.pow(1 - seaDistance / 80, 1.7) * 0.5 : 0;
+    if (waveVolume > 0 || waves) {
+      const loop = wavesLoop();
+      if (loop) loop.gain.gain.setTargetAtTime(waveVolume, context.currentTime, 0.6);
+    }
+    // Typing: within 18 m of a coworking table
+    if (typingDistance < 18) {
+      const volume = Math.pow(1 - typingDistance / 18, 1.5) * 0.12;
+      typingTimer -= deltaSeconds;
+      if (typingTimer <= 0) {
+        if (typingBurst <= 0) { typingBurst = 3 + Math.floor(Math.random() * 9); typingTimer = 0.25 + Math.random() * 0.9; }
+        else {
+          typingBurst -= 1;
+          keyClick(volume, typingBurst === 0 && Math.random() < 0.6);
+          typingTimer = 0.06 + Math.random() * 0.11;
+        }
+      }
+    }
     // Fire volume: full at the fire, silent beyond 22 m
     const fireVolume = fireDistance < 22 ? Math.pow(1 - fireDistance / 22, 2) * 0.55 : 0;
     if (fireVolume > 0 || fire) {
@@ -188,18 +214,7 @@ const Sound = (() => {
       if (airborneFor > 0.45) play('land');
       airborneFor = 0;
     }
-    // Mouse glide while the cursor moves on the ground (brighter when running)
-    const gliding = moving && grounded;
-    const loop = gliding || glide ? glideLoop() : null;
-    if (loop) {
-      loop.gain.gain.setTargetAtTime(gliding ? (running ? 0.16 : 0.1) : 0, context.currentTime, gliding ? 0.06 : 0.12);
-      loop.band.frequency.setTargetAtTime(running ? 3200 : 2400, context.currentTime, 0.2);
-    }
-    glideTickTimer -= deltaSeconds;
-    if (gliding && glideTickTimer <= 0) {
-      play('mouseTick');
-      glideTickTimer = 0.8 + Math.random() * 1.6;
-    }
+    // (No walking sound: the cursor moves silently, like on Cursor Camp)
     if (night) {
       cricketTimer -= deltaSeconds;
       if (cricketTimer <= 0) { play('cricket'); cricketTimer = 1.5 + Math.random() * 3; }

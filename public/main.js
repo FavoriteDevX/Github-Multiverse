@@ -1901,6 +1901,8 @@ function setupNetwork(session) {
 // is not drawn at all: those screens stay smooth and the districts finish
 // building sooner, instead of the GPU drawing frames nobody can see
 let coverScreens = null;
+let lastSeaCheck = -1;
+let lastSeaDistance = Infinity;
 let shadowFrame = 0;
 function worldCovered() {
   if (!coverScreens) coverScreens = { auth: document.getElementById('auth-screen') };
@@ -1970,7 +1972,21 @@ function animate() {
     }
     // Streets and the paved commons sound like stone; the parcels for sale sound like grass
     const onGrass = !here && avatar.position.y > -20 && !['road', 'commons'].includes(City.landAt(avatar.position.x, avatar.position.z));
-    Sound.update(deltaSeconds, { moving: avatar.moving && viewMode === 'explore', grounded: avatar.grounded || flying, running: keysPressed.has('shift'), surface: onGrass ? 'grass' : surface === 'grass' && !here ? 'stone' : surface, night: ticks > 13000 && ticks < 23000 && avatar.position.y > -20, fireDistance: lastFireDistance, day: ticks < 12000 && avatar.position.y > -20 });
+    // Distance to the sea, sampled twice a second around the avatar (for the surf)
+    if (elapsed - lastSeaCheck > 0.5) {
+      lastSeaCheck = elapsed;
+      lastSeaDistance = Infinity;
+      if (avatar.position.y > -20) {
+        for (const radius of [0, 8, 18, 32, 50, 75]) {
+          for (let k = 0; k < 12 && lastSeaDistance === Infinity; k++) {
+            const angle = (k / 12) * Math.PI * 2;
+            if (City.landAt(avatar.position.x + Math.cos(angle) * radius, avatar.position.z + Math.sin(angle) * radius) === 'sea') lastSeaDistance = radius;
+          }
+          if (lastSeaDistance !== Infinity) break;
+        }
+      }
+    }
+    Sound.update(deltaSeconds, { grounded: avatar.grounded || flying, night: ticks > 13000 && ticks < 23000 && avatar.position.y > -20, fireDistance: lastFireDistance, day: ticks < 12000 && avatar.position.y > -20, seaDistance: lastSeaDistance, typingDistance: Coworking.distanceToTables(avatar.position) });
   }
   Cafe.update(elapsed);
   LootSystem.update(elapsed, deltaSeconds);

@@ -425,5 +425,12 @@ const Coworking = (() => {
     socket.on('new_developer_joined', (peer) => setTimeout(() => applyStatus(hooks.peers()[peer.id], peer.status || 'available'), 0));
   }
 
-  return { connect, update, close, isOpen: () => Boolean(overlay), currentTable: () => currentTable, tableName };
+  // Distance to the nearest coworking table (for the typing sounds)
+  function distanceToTables(position) {
+    let best = Infinity;
+    zones.forEach((zone) => { zone.marker.getWorldPosition(probe); best = Math.min(best, Math.hypot(position.x - probe.x, position.z - probe.z), Math.abs(position.y - probe.y) > 6 ? Infinity : best); });
+    return best;
+  }
+
+  return { connect, update, close, isOpen: () => Boolean(overlay), currentTable: () => currentTable, tableName, distanceToTables };
 })();
