@@ -323,6 +323,83 @@
           group.add(bulb);
         }
       }
+      // Concert rig: towers of huge speakers on both sides of the stage, woofers
+      // that pump to a 124 BPM kick, neon trims cycling through colors, and a
+      // DJ booth with two turntables, a mixer and glowing front panel
+      const cabinet = material('#16171b', { roughness: 0.55, metalness: 0.2 });
+      const grille = material('#24262c', { roughness: 0.9 });
+      const cone = material('#0c0c0e', { roughness: 0.4, metalness: 0.3 });
+      const woofers = [];
+      const neons = [];
+      [-1, 1].forEach((side) => {
+        const tower = new THREE.Group();
+        for (let level = 0; level < 3; level++) {
+          const y = 1.2 + level * 2.3;
+          tower.add(box(2.4, 2.2, 1.8, cabinet, 0, y, 0));
+          tower.add(box(2.2, 2.0, 0.05, grille, 0, y, 0.92));
+          // Two woofers per cabinet on the lower boxes, horns on the top one
+          const cones = level < 2 ? [[-0.5, y], [0.5, y]] : [[0, y + 0.35]];
+          cones.forEach(([cx, cy]) => {
+            const size = level < 2 ? 0.44 : 0.36;
+            const ring = mesh(new THREE.TorusGeometry(size + 0.06, 0.05, 6, 24), glow('#ff2bd6', 1.6), cx, cy, 0.96);
+            tower.add(ring);
+            neons.push(ring);
+            const woofer = mesh(new THREE.CylinderGeometry(size, size * 0.4, 0.25, 24).rotateX(Math.PI / 2), cone, cx, cy, 0.9);
+            tower.add(woofer);
+            woofers.push(woofer);
+          });
+          if (level === 2) tower.add(box(1.6, 0.4, 0.06, glow('#4dabf7', 1.4), 0, y - 0.55, 0.95));
+        }
+        const strip = box(0.08, 6.9, 0.08, glow('#4dabf7', 1.8), 1.25, 3.45, 0.95);
+        tower.add(strip);
+        neons.push(strip);
+        tower.position.set(side * radius * 0.4, 0.3, -radius * 0.18);
+        tower.rotation.y = -side * 0.35;
+        tower.traverse((node) => { if (node.isMesh) node.castShadow = true; });
+        group.add(tower);
+        neons.push(tower);
+      });
+      const booth = new THREE.Group();
+      booth.add(box(4.2, 1.1, 1.3, material('#1a1b20', { metalness: 0.4, roughness: 0.4 }), 0, 0.85, 0));
+      const front = box(4.1, 0.9, 0.05, glow('#7048e8', 1.4), 0, 0.82, 0.67);
+      booth.add(front);
+      neons.push(front);
+      booth.add(box(4.4, 0.08, 1.5, material('#2a2c33', { metalness: 0.5 }), 0, 1.44, 0));
+      [-1.25, 1.25].forEach((x) => {
+        booth.add(box(1.2, 0.1, 1.0, material('#3a3d45', { metalness: 0.6 }), x, 1.53, 0));
+        const platter = mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.04, 32), material('#0b0b0d', { roughness: 0.3 }), x - 0.08, 1.6, 0);
+        booth.add(platter);
+        booth.add(cylinder(0.06, 0.06, 0.045, glow('#ff6b6b', 1.3), x - 0.08, 1.625, 0, 12));
+        const arm = box(0.04, 0.03, 0.5, material('#c9ccd1', { metalness: 0.8 }), x + 0.42, 1.66, -0.05);
+        arm.rotation.y = 0.35;
+        booth.add(arm);
+        woofers.push(platter);
+        platter.userData.spin = true;
+      });
+      booth.add(box(0.7, 0.12, 0.9, material('#25272e', { metalness: 0.6 }), 0, 1.54, 0));
+      for (let i = 0; i < 4; i++) booth.add(box(0.04, 0.05, 0.3, glow(['#51cf66', '#fcc419', '#ff6b6b', '#4dabf7'][i], 1.4), -0.24 + i * 0.16, 1.62, 0.1));
+      booth.add(box(1.6, 0.06, 0.3, glow('#e64980', 1.5), 0, 1.47, 0.62));
+      booth.position.set(0, 0.3, -radius * 0.12);
+      group.add(interactive(booth, 'inspect', 'DJ booth: two turntables and a mixer'));
+      // Own copies of the neon materials (shared materials would recolor other props)
+      neons.forEach((part) => { if (part.isMesh) part.material = part.material.clone(); });
+      const neonColors = ['#ff2bd6', '#4dabf7', '#51cf66', '#fcc419', '#7048e8'];
+      const tint = new THREE.Color();
+      animate(booth, (time) => {
+        const beat = (time * 124 / 60) % 1;
+        const kick = Math.exp(-beat * 9);
+        woofers.forEach((part) => {
+          if (part.userData.spin) { part.rotation.y = time * 3.5; return; }
+          part.scale.set(1 + kick * 0.12, 1 + kick * 0.12, 1 + kick * 0.6);
+        });
+        tint.set(neonColors[Math.floor(time * 124 / 60 / 4) % neonColors.length]);
+        neons.forEach((part) => {
+          if (part.isGroup) { part.position.y = 0.3 + kick * 0.03; return; }
+          part.material.emissive.copy(tint);
+          part.material.color.copy(tint);
+          part.material.emissiveIntensity = 1 + kick * 1.6;
+        });
+      });
       const sign = textSprite(label || 'Open Stage', { width: 7, background: 'rgba(43, 45, 66, 0.9)' });
       sign.position.set(0, 12.5, -radius * 0.5);
       group.add(sign);
