@@ -928,6 +928,10 @@ vec3 grainPerturb( vec3 surfPos, vec3 surfNorm, vec2 dHdxy, float faceDir ) {
 
   // Detail map from height/roughness arrays (rows flipped to match the
   // flipY of canvas textures, so bumps line up with the color map)
+  // Height data behind each detail map, and the normal map made from it
+  // (three r128 textures have no userData, so they are kept in WeakMaps)
+  const detailHeights = new WeakMap();
+  const detailNormals = new WeakMap();
   function detailTexture(height, rough, w, h) {
     const bytes = new Uint8Array(w * h * 4);
     for (let y = 0; y < h; y++) {
@@ -941,7 +945,7 @@ vec3 grainPerturb( vec3 surfPos, vec3 surfNorm, vec2 dHdxy, float faceDir ) {
       }
     }
     const texture = dataTexture(bytes, w, h);
-    texture.userData.height = { height, w, h };
+    detailHeights.set(texture, { height, w, h });
     return texture;
   }
 
@@ -950,8 +954,8 @@ vec3 grainPerturb( vec3 surfPos, vec3 surfNorm, vec2 dHdxy, float faceDir ) {
   // plank seam and brick edge catches the sun and casts its own shading as the
   // light moves. Big maps are computed at half size (sharp enough, 4x lighter).
   function normalTexture(detail) {
-    if (detail.userData.normal) return detail.userData.normal;
-    const source = detail.userData.height;
+    if (detailNormals.has(detail)) return detailNormals.get(detail);
+    const source = detailHeights.get(detail);
     if (!source) return null;
     const step = source.w >= 1024 ? 2 : 1;
     const w = Math.floor(source.w / step);
@@ -982,7 +986,7 @@ vec3 grainPerturb( vec3 surfPos, vec3 surfNorm, vec2 dHdxy, float faceDir ) {
       }
     }
     const normal = dataTexture(bytes, w, h);
-    detail.userData.normal = normal;
+    detailNormals.set(detail, normal);
     return normal;
   }
 
