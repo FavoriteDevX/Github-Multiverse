@@ -22,6 +22,7 @@ const BrandLogos = (() => {
     Figma: 'figma', Postman: 'postman', Uber: 'uber', Tesla: 'tesla', HP: 'hp', Intel: 'intel',
     Cisco: 'cisco', Netflix: 'netflix', eBay: 'ebay', EA: 'ea', 'Electronic Arts': 'ea', Googleplex: 'google',
     macOS: 'macos', 'App Store': 'appstore', Safari: 'safari', Xcode: 'xcode', Swift: 'swift', iCloud: 'icloud', iOS: 'ios',
+    Unity: 'unity', Blender: 'blender', 'Cinema 4D': 'cinema4d', 'Unreal Engine': 'unrealengine', Godot: 'godotengine', 'Godot Engine': 'godotengine',
     'Apple Music': 'applemusic', 'Apple TV': 'appletv', 'Apple Arcade': 'applearcade', 'Apple Pay': 'applepay', iMessage: 'imessage', 'Apple News': 'applenews', 'Apple Podcasts': 'applepodcasts'
   };
   const svgCache = new Map();

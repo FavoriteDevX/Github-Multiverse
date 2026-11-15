@@ -1,0 +1,90 @@
+{
+ "themeName": "The Commons",
+ "backgroundColor": "#eef1f5",
+ "blocks": [
+  {
+   "type": "commons_floor",
+   "position": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    150,
+    0.3,
+    120
+   ],
+   "label": "The Commons"
+  },
+  {
+   "type": "outdoor_cinema",
+   "position": [
+    0,
+    5,
+    -38
+   ],
+   "scale": [
+    44,
+    10,
+    34
+   ],
+   "label": "Open-air micro cinema"
+  },
+  {
+   "type": "sauna",
+   "position": [
+    54,
+    2,
+    -30
+   ],
+   "scale": [
+    8,
+    4,
+    7
+   ],
+   "label": "Sauna"
+  },
+  {
+   "type": "modern_pergola",
+   "position": [
+    -52,
+    1.6,
+    8
+   ],
+   "scale": [
+    8,
+    3.2,
+    6
+   ],
+   "label": "Pergola \u00b7 cowork laptops"
+  },
+  {
+   "type": "modern_pergola",
+   "position": [
+    -52,
+    1.6,
+    30
+   ],
+   "scale": [
+    8,
+    3.2,
+    6
+   ],
+   "label": "Pergola \u00b7 cowork laptops"
+  },
+  {
+   "type": "dev_ads",
+   "position": [
+    0,
+    2.5,
+    52
+   ],
+   "scale": [
+    28,
+    5,
+    0.5
+   ],
+   "label": "Creative tools and engines"
+  }
+ ]
+}

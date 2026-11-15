@@ -1,0 +1,20 @@
+{
+ "themeName": "Code Cave",
+ "backgroundColor": "#d9d4c7",
+ "blocks": [
+  {
+   "type": "code_cave",
+   "position": [
+    0,
+    4,
+    0
+   ],
+   "scale": [
+    20,
+    8,
+    20
+   ],
+   "label": "Code Cave"
+  }
+ ]
+}

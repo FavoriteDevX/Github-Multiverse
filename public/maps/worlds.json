@@ -634,127 +634,127 @@
     0
    ],
    "size": [
-    440,
-    380
+    880,
+    760
    ]
   },
   "color": "#f39c12",
   "view": [
    0,
-   40,
-   70
+   70,
+   130
   ],
   "places": [
    {
     "key": "applepark",
     "name": "Apple Park",
     "at": [
-     -140,
-     -30
+     -280.0,
+     -60.0
     ]
    },
    {
     "key": "google",
     "name": "Googleplex",
     "at": [
-     5,
-     -40
+     10.0,
+     -80.0
     ]
    },
    {
     "key": "meta",
     "name": "Meta",
     "at": [
-     135,
-     -50
+     270.0,
+     -100.0
     ]
    },
    {
     "key": "anthropic",
     "name": "Anthropic",
     "at": [
-     -170,
-     62
+     -340.0,
+     124.0
     ]
    },
    {
     "key": "openai",
     "name": "OpenAI",
     "at": [
-     -120,
-     62
+     -240.0,
+     124.0
     ]
    },
    {
     "key": "github",
     "name": "GitHub HQ",
     "at": [
-     -70,
-     62
+     -140.0,
+     124.0
     ]
    },
    {
     "key": "tesla",
     "name": "Tesla",
     "at": [
-     70,
-     62
+     140.0,
+     124.0
     ]
    },
    {
     "key": "microsoft",
     "name": "Microsoft",
     "at": [
-     120,
-     62
+     240.0,
+     124.0
     ]
    },
    {
     "key": "intel",
     "name": "Intel",
     "at": [
-     170,
-     62
+     340.0,
+     124.0
     ]
    },
    {
     "key": "nvidia",
     "name": "NVIDIA",
     "at": [
-     -170,
-     110
+     -340.0,
+     220.0
     ]
    },
    {
     "key": "netflix",
     "name": "Netflix",
     "at": [
-     100,
-     110
+     200.0,
+     220.0
     ]
    },
    {
     "key": "oracle",
     "name": "Oracle",
     "at": [
-     -150,
-     190
+     -300.0,
+     380.0
     ]
    },
    {
     "key": "ea",
     "name": "Electronic Arts",
     "at": [
-     -75,
-     185
+     -150.0,
+     370.0
     ]
    },
    {
     "key": "adobe",
     "name": "Adobe",
     "at": [
-     75,
-     185
+     150.0,
+     370.0
     ]
    }
   ],
@@ -774,7 +774,7 @@
   "region": {
    "center": [
     14000,
-    520
+    1000
    ],
    "size": [
     320,
@@ -827,5 +827,47 @@
   "photo": true,
   "world": true,
   "island": "bare"
+ },
+ {
+  "key": "commons",
+  "file": "map_commons.json",
+  "name": "The Commons",
+  "description": "A wide, bright open space to hang out: an open-air micro cinema with movie clips, a wooden sauna, modern pergolas with cube tables and Windows 11 and macOS style laptops, and ads for creative tools and game engines",
+  "region": {
+   "center": [
+    620,
+    -380
+   ],
+   "size": [
+    150,
+    120
+   ]
+  },
+  "color": "#74c0fc",
+  "spawn": [
+   0,
+   40
+  ]
+ },
+ {
+  "key": "codecave",
+  "file": "map_code_cave.json",
+  "name": "Code Cave",
+  "description": "An opening in the ground and the hillside, like a Minecraft cave entrance, with cave paintings of the first lines of code on its walls",
+  "region": {
+   "center": [
+    -640,
+    420
+   ],
+   "size": [
+    40,
+    40
+   ]
+  },
+  "color": "#8d8f91",
+  "spawn": [
+   0,
+   16
+  ]
  }
 ]
