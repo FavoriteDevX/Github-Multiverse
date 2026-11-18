@@ -1,0 +1,2 @@
+- name: Publish iOS App to App Store
+  uses: openMF/mifos-x-actionhub-publish-ios-on-appstore@v1.0.15
